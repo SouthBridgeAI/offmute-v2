@@ -79,6 +79,7 @@ Your job: produce the canonical set of speakers.
 - Merge labels that refer to the SAME person.
 - Give each canonical speaker a name if it can be inferred from the transcript (someone introduces themselves, or is addressed by name); otherwise keep a clean generic label like "Speaker 1".
 - Add a short role/description if evident (e.g. "main presenter", "audience member").
+- Each canonical speaker must be exactly ONE person. NEVER create a catch-all like "Panel", "Multiple", "Various", or "Mixed". If a raw label seems to cover overlapping/multiple voices, assign it to the single most likely dominant speaker (use the voice analysis below).
 ${options.instructions ? `- Follow these user instructions for naming/grouping: ${options.instructions}\n` : ""}
 Distinct raw labels: ${labels.map((l) => `"${l}"`).join(", ")}
 
