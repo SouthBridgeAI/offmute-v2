@@ -24,17 +24,15 @@ export interface ConsistencyResult {
   llmLabelToAsr: Record<string, string>;
 }
 
-/** Map "speaker_A" → 0, "speaker_B" → 1, … for stable ordering. */
-function speakerRank(id: string): number {
-  const m = id.match(/speaker_([A-Z])/);
-  if (!m) return 999;
-  return m[1]!.charCodeAt(0) - 65;
+/** A generic LLM label like "Speaker A" / "Unknown" — not safe to merge by. */
+function isGenericLabel(label: string): boolean {
+  return /^(speaker\s+[a-z0-9]+|unknown|audience(\s+member)?(\s+\d+)?)$/i.test(label.trim());
 }
 
-/**
- * Assign globally-consistent speaker ids to aligned segments via ASR time overlap,
- * and derive display names from the LLM labels.
- */
+/** Assign globally-consistent speaker ids to aligned segments via ASR time overlap,
+ * merging ASR speakers that the LLM consistently labels the same specific name/role
+ * (handles ASR over-splitting, e.g. one presenter split into speaker_A + speaker_B).
+ * Global ids "Speaker A", "Speaker B", … are assigned by total talk time. */
 export function assignGlobalSpeakers(
   segments: AlignedSegment[],
   asrUtterances: TimestampedUtterance[],
@@ -59,25 +57,62 @@ export function assignGlobalSpeakers(
       (labelVotes[o.asrSpeaker]![o.seg.speaker] ?? 0) + 1;
   }
 
-  // Display name per ASR speaker = most common LLM label among its segments.
-  const displayNames: Record<string, string> = {};
+  // Dominant LLM label per ASR speaker.
+  const dominantLabel: Record<string, string> = {};
   for (const [asrSp, votes] of Object.entries(labelVotes)) {
     const best = Object.entries(votes).sort((a, b) => b[1] - a[1])[0];
-    displayNames[asrSp] = best ? best[0] : asrSp;
+    dominantLabel[asrSp] = best ? best[0] : asrSp;
   }
 
-  // LLM label → dominant ASR speaker (useful for identification + merging decisions).
+  // Merge ASR speakers that share a SPECIFIC dominant label (same person, ASR over-split).
+  const asrToGroup: Record<string, string> = {};
+  const groupLabel: Record<string, string> = {};
+  const groupTalk: Record<string, number> = {};
+  for (const asrSp of Object.keys(labelVotes)) {
+    const label = dominantLabel[asrSp] ?? asrSp;
+    let groupId: string | undefined;
+    if (!isGenericLabel(label)) {
+      // Find an existing group with the same specific label.
+      groupId = Object.keys(groupLabel).find((g) => groupLabel[g] === label);
+    }
+    if (!groupId) {
+      groupId = asrSp;
+      groupLabel[groupId] = label;
+    }
+    asrToGroup[asrSp] = groupId;
+    const talk = Object.entries(labelVotes[asrSp]!).reduce((a, [, c]) => a + c, 0);
+    groupTalk[groupId] = (groupTalk[groupId] ?? 0) + talk;
+  }
+
+  // Assign global ids "Speaker A", "Speaker B", … by talk time (desc).
+  const groupsByTalk = Object.keys(groupTalk).sort((a, b) => groupTalk[b]! - groupTalk[a]!);
+  const groupToGlobal: Record<string, string> = {};
+  groupsByTalk.forEach((g, i) => {
+    groupToGlobal[g] = `Speaker ${String.fromCharCode(65 + i)}`;
+  });
+
+  // Display name: specific LLM label if available, else the global id.
+  const displayNames: Record<string, string> = {};
+  for (const g of groupsByTalk) {
+    const label = groupLabel[g]!;
+    displayNames[groupToGlobal[g]!] = isGenericLabel(label) ? groupToGlobal[g]! : label;
+  }
+
+  // LLM label → global speaker (for identification).
   const llmLabelToAsr: Record<string, string> = {};
   for (const o of out) {
-    llmLabelToAsr[o.seg.speaker] = o.asrSpeaker; // last-write (segments are time-ordered)
+    llmLabelToAsr[o.seg.speaker] = groupToGlobal[asrToGroup[o.asrSpeaker]!]!;
   }
 
-  // Relabel segments + collect speaker stats.
-  const updated = out.map((o) => ({
-    ...o.seg,
-    speaker: o.asrSpeaker,
-    speakerName: displayNames[o.asrSpeaker] || o.asrSpeaker,
-  }));
+  // Relabel segments.
+  const updated = out.map((o) => {
+    const global = groupToGlobal[asrToGroup[o.asrSpeaker]!]!;
+    return {
+      ...o.seg,
+      speaker: global,
+      speakerName: displayNames[global] || global,
+    };
+  });
 
   const speakerMap: Record<string, { count: number; talk: number }> = {};
   for (const s of updated) {
@@ -92,7 +127,7 @@ export function assignGlobalSpeakers(
       segmentCount: v.count,
       talkTime: v.talk,
     }))
-    .sort((a, b) => speakerRank(a.id) - speakerRank(b.id));
+    .sort((a, b) => (b.talkTime ?? 0) - (a.talkTime ?? 0));
 
   return { segments: updated, speakers, displayNames, llmLabelToAsr };
 }
