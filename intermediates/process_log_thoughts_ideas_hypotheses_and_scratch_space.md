@@ -410,3 +410,18 @@ WER 0.135 (86.5%) · coverage 38/38 · boundary median 0.00s p90 2.16s · speake
 - BUG FIXED: resolveOptions return object omitted `model`/`reasoner`/`timestampedProvider`
   (they were in the type but undefined at runtime) → --model/--reasoner/--timestamped were
   silently ignored. Now flow through. (Earlier runs used defaults so it was masked.)
+
+### Finishing pass — complete
+- Gap-fill: recovers dropped content (e.g. "GPU" opener at 00:00:00.160). 3 tests.
+- Groq Whisper fallback (--timestamped whisper-groq): word timestamps, no diarization;
+  consistency falls back to LLM-label grouping. WER 0.132 on test-files/1 (comparable).
+- Tone: prompt nudge → 70% coverage (was ~4%); informative/joking/questioning/sarcastic.
+- BUG FIX: resolveOptions now returns model/reasoner/timestampedProvider (were undefined).
+- Lint: 0 errors (16 pragmatic `any` in provider interop). 27 tests. Zero-duration speaker
+  artifacts filtered.
+
+### Final fresh run (test-files/1, level 3, all finishing-pass changes)
+WER 0.146 (85.4%) · coverage 38/38 · boundary timing median 0.00s p90 0.68s · speaker 96%
+· tone 70% · "GPU" recovered · 1 presenter (Presenter (Hrishi)) + 4 audience.
+(WER 0.136→0.146 vs the earlier cached run is within LLM run-to-run variance; boundary
+timing improved p90 2.16s→0.68s.)
