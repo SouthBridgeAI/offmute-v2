@@ -151,6 +151,7 @@ export function assignGlobalSpeakers(
       segmentCount: v.count,
       talkTime: v.talk,
     }))
+    .filter((s) => s.talkTime > 0) // drop zero-duration artifacts
     .sort((a, b) => (b.talkTime ?? 0) - (a.talkTime ?? 0));
 
   return { segments: updated, speakers, displayNames, llmLabelToAsr };
