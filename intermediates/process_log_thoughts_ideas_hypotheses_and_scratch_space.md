@@ -377,3 +377,24 @@ Subagent review found real bugs; fixed:
   regardless — documented.
 Result after fixes: WER 0.135, speaker accuracy 94%→97%, 1 named presenter (Rishi) + 4 audience
 questioners, clean output.
+
+### Generalization verified — test-files/2 (Satya Nadella podcast, 41min, no reference)
+Ran the full default pipeline on a completely different file (podcast, 3 speakers).
+- 201/201 segments aligned with ASR timing; 189 final segments.
+- Diarized 3 speakers correctly: **Speaker A = "Satya Nadella" (1962s)**, Speaker B =
+  "Host (Female)" (312s), Speaker C = "Host (Male)" (128s). The identify pass named the
+  guest AND role-labeled the hosts. SRT reads cleanly ("Host (Female): Please welcome...
+  Satya Nadella"). System generalizes (talk→podcast, 2→3 speakers, named ID).
+
+### Finalize merge — tried & reverted
+Added mergeShortAdjacent (merge tiny same-speaker adjacent blocks for readability). It
+REGRESSED WER 0.135→0.160 and inflated word count: adjacent segments share boundary words
+(e.g. "...get it" / "get it. So by the way"), and concatenating duplicates them. A
+text-similarity guard (skip high-sim) didn't fully fix it because shared-boundary segments
+have LOW overall similarity yet share a phrase. Reverted — the tiny-block cosmetic issue
+isn't worth a WER regression. (If revisited: merge on WORD-level dedup, not text concat.)
+
+### Final state (test-files/1)
+WER 0.135 (86.5%) · coverage 38/38 · boundary median 0.00s p90 2.16s · speaker 97% ·
+1 named presenter (Rishi) + 4 audience questioners. 20 unit tests pass. typecheck + lint
+(0 errors) + build (node + browser) green.
