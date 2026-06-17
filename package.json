@@ -25,9 +25,10 @@
   "scripts": {
     "build": "tsup",
     "typecheck": "tsc --noEmit",
-    "lint": "eslint src --ext .ts",
     "dev": "bun run src/cli.ts",
-    "test": "bun test"
+    "test": "bun test",
+    "check": "tsc --noEmit && bun test",
+    "prepublishOnly": "npm run check && npm run build"
   },
   "keywords": [
     "transcription",
