@@ -398,3 +398,15 @@ isn't worth a WER regression. (If revisited: merge on WORD-level dedup, not text
 WER 0.135 (86.5%) · coverage 38/38 · boundary median 0.00s p90 2.16s · speaker 97% ·
 1 named presenter (Rishi) + 4 audience questioners. 20 unit tests pass. typecheck + lint
 (0 errors) + build (node + browser) green.
+
+### Groq Whisper fallback provider (whisper-groq) — wired
+- Free/fast timestamped fallback when AssemblyAI is unavailable. Groq's /audio/
+  transcriptions (whisper-large-v3-turbo) returns word timestamps (no diarization).
+  25MB limit → pipeline extracts a 64k mono mp3 for it.
+- Consistency has a `hasDiarization` flag: when false (Whisper), groups by LLM label
+  directly (no ASR backbone). Identify still works (named "Rishi" from LLM content).
+- test-files/1 via Groq: WER 0.132 (86.8%), boundary median 0.26s p90 2.47s, speaker 93%.
+  More speaker fragmentation (9 vs 5) without ASR diarization — AssemblyAI stays default.
+- BUG FIXED: resolveOptions return object omitted `model`/`reasoner`/`timestampedProvider`
+  (they were in the type but undefined at runtime) → --model/--reasoner/--timestamped were
+  silently ignored. Now flow through. (Earlier runs used defaults so it was masked.)

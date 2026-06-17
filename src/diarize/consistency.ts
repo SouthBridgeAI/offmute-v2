@@ -36,7 +36,9 @@ function isGenericLabel(label: string): boolean {
 export function assignGlobalSpeakers(
   segments: AlignedSegment[],
   asrUtterances: TimestampedUtterance[],
+  opts: { hasDiarization?: boolean } = {},
 ): ConsistencyResult {
+  const hasDiarization = opts.hasDiarization ?? true;
   // For each segment, vote by overlap duration across ASR utterances.
   const out = segments.map((seg) => ({ seg, asrSpeaker: "" }));
   const labelVotes: Record<string, Record<string, number>> = {}; // asrSpeaker -> {llmLabel: count}
@@ -45,27 +47,33 @@ export function assignGlobalSpeakers(
   for (const o of out) {
     let bestSpeaker = "";
     let bestOverlap = 0;
-    for (const u of asrUtterances) {
-      const ov = overlap(o.seg.start, o.seg.end, u.start, u.end);
-      if (ov > bestOverlap) {
-        bestOverlap = ov;
-        bestSpeaker = u.speaker;
-      }
-    }
-    if (!bestSpeaker) {
-      // No time overlap (segment landed in a gap): pick the NEAREST utterance by time,
-      // not utterances[0] — otherwise we'd misattribute to an unrelated speaker.
-      let bestDist = Infinity;
-      const segMid = (o.seg.start + o.seg.end) / 2;
+    if (hasDiarization) {
       for (const u of asrUtterances) {
-        const uMid = (u.start + u.end) / 2;
-        const d = Math.abs(uMid - segMid);
-        if (d < bestDist) {
-          bestDist = d;
+        const ov = overlap(o.seg.start, o.seg.end, u.start, u.end);
+        if (ov > bestOverlap) {
+          bestOverlap = ov;
           bestSpeaker = u.speaker;
         }
       }
-      bestSpeaker = bestSpeaker || "speaker_?";
+      if (!bestSpeaker) {
+        // No time overlap (segment landed in a gap): pick the NEAREST utterance by time,
+        // not utterances[0] — otherwise we'd misattribute to an unrelated speaker.
+        let bestDist = Infinity;
+        const segMid = (o.seg.start + o.seg.end) / 2;
+        for (const u of asrUtterances) {
+          const uMid = (u.start + u.end) / 2;
+          const d = Math.abs(uMid - segMid);
+          if (d < bestDist) {
+            bestDist = d;
+            bestSpeaker = u.speaker;
+          }
+        }
+        bestSpeaker = bestSpeaker || "speaker_?";
+      }
+    } else {
+      // ASR has no diarization (e.g. Whisper fallback): group directly by the LLM label.
+      bestSpeaker = o.seg.speaker || "speaker_?";
+      bestOverlap = o.seg.end - o.seg.start;
     }
     o.asrSpeaker = bestSpeaker;
     asrDuration[o.asrSpeaker] = (asrDuration[o.asrSpeaker] ?? 0) + Math.max(bestOverlap, 0.1);

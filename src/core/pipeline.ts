@@ -29,6 +29,7 @@ import {
 } from "../audio/ffmpeg.js";
 import { GeminiClient } from "../providers/gemini.js";
 import { AssemblyAIProvider } from "../providers/assemblyai.js";
+import { WhisperGroqClient } from "../providers/whisper-groq.js";
 import { describeMeeting, type MeetingDescription } from "../transcribe/describe.js";
 import { transcribeChunk, type ParsedLlmSegment, type ChunkTranscriptionResult } from "../transcribe/llm-transcribe.js";
 import { alignSegments, type AlignedSegment } from "../align/aligner.js";
@@ -226,13 +227,34 @@ export async function transcribe(opts: PipelineOptions): Promise<TranscriptResul
   logger.info(`total LLM segments: ${allLlmSegments.length}`);
 
   // ---------- 4. TIMESTAMPED ----------
-  let asrResult: { utterances: TimestampedUtterance[]; words: TimestampedWord[]; durationSec: number } | null = null;
+  let asrResult: {
+    utterances: TimestampedUtterance[];
+    words: TimestampedWord[];
+    durationSec: number;
+    hasDiarization?: boolean;
+  } | null = null;
   if (has(passes, "timestamped") || has(passes, "align")) {
-    logger.info("=== timestamped (AssemblyAI) ===");
-    if (!keys.assemblyai) throw new Error("ASSEMBLYAI_API_KEY is required for the timestamped pass");
-    const aai = new AssemblyAIProvider({ apiKey: keys.assemblyai!, cacheDir: `${options.intermediatesDir}/assemblyai` });
-    asrResult = await aai.transcribe(audioPath);
-    writeJson(`${options.intermediatesDir}/timestamped.json`, asrResult);
+    const provider = options.timestampedProvider ?? "assemblyai";
+    if (provider === "whisper-groq") {
+      logger.info("=== timestamped (Groq Whisper — no diarization) ===");
+      if (!keys.groq) throw new Error("GROQ_API_KEY is required for whisper-groq");
+      // Groq's 25MB limit: use a compressed mono mp3.
+      const mp3Path = `${options.intermediatesDir}/audio.mp3`;
+      if (!existsSync(mp3Path) || options.force) {
+        await extractAudio(options.input, mp3Path, { format: "mp3", bitrate: "64k" });
+      }
+      const { readFile } = await import("node:fs/promises");
+      const buf = await readFile(mp3Path);
+      const groq = new WhisperGroqClient(keys.groq!);
+      asrResult = await groq.transcribe(buf);
+      writeJson(`${options.intermediatesDir}/timestamped.json`, asrResult);
+    } else {
+      logger.info("=== timestamped (AssemblyAI) ===");
+      if (!keys.assemblyai) throw new Error("ASSEMBLYAI_API_KEY is required for the timestamped pass (or use --timestamped whisper-groq)");
+      const aai = new AssemblyAIProvider({ apiKey: keys.assemblyai!, cacheDir: `${options.intermediatesDir}/assemblyai` });
+      asrResult = await aai.transcribe(audioPath);
+      writeJson(`${options.intermediatesDir}/timestamped.json`, asrResult);
+    }
   } else {
     asrResult = readJson(`${options.intermediatesDir}/timestamped.json`);
   }
@@ -263,7 +285,9 @@ export async function transcribe(opts: PipelineOptions): Promise<TranscriptResul
   let speakers: TranscriptResult["speakers"] = [];
   if (has(passes, "consistency") && asrResult) {
     logger.info("=== consistency ===");
-    const cons = assignGlobalSpeakers(aligned, asrResult.utterances);
+    const cons = assignGlobalSpeakers(aligned, asrResult.utterances, {
+      hasDiarization: asrResult.hasDiarization ?? true,
+    });
     segments = cons.segments;
     speakers = cons.speakers;
     writeJson(`${options.intermediatesDir}/consistent.json`, { segments, speakers });

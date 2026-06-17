@@ -30,6 +30,8 @@ export interface AssemblyAIResult {
   speakers: string[];
   transcriptId: string;
   speechModelUsed?: string;
+  /** AssemblyAI does its own speaker diarization. */
+  hasDiarization: true;
 }
 
 async function fileHash(path: string): Promise<string> {
@@ -124,6 +126,7 @@ export class AssemblyAIProvider {
       speakers: [...speakers].sort(),
       transcriptId: t.id || id,
       speechModelUsed: t.speech_model_used,
+      hasDiarization: true,
     };
   }
 }
