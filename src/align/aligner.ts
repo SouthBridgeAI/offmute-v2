@@ -22,6 +22,8 @@ export interface AlignedWord {
 
 export interface AlignedSegment {
   speaker: string;
+  /** Display name (set by the consistency/identification pass). */
+  speakerName?: string;
   start: number; // accurate absolute seconds
   end: number;
   text: string; // LLM text preserved

@@ -23,13 +23,15 @@ export interface Segment {
   /** Free-form tone/emotion/behavior annotations, e.g. "hesitant", "laughing". */
   tone?: string[];
   /** Where the timing came from — useful for debugging alignment. */
-  timingSource?: "llm" | "aligned" | "timestamped" | "interpolated";
+  timingSource?: "llm" | "aligned" | "timestamped" | "interpolated" | "coarse";
   /** Where the text came from. */
   textSource?: "llm" | "timestamped";
   /** Which chunk produced this segment (pre-merge). */
   sourceChunk?: number;
   /** Alignment confidence in [0,1] when produced by the aligner. */
   confidence?: number;
+  /** Per-word timing (for SRT sub-splitting of long turns). */
+  words?: { text: string; start: number; end: number; matched?: boolean }[];
 }
 
 /** A planned audio chunk with overlap metadata for clean deduplication. */

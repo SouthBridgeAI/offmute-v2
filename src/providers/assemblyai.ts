@@ -5,7 +5,7 @@
  */
 import { AssemblyAI } from "assemblyai";
 import { createHash } from "node:crypto";
-import { readFile, mkdir, writeFile, stat } from "node:fs/promises";
+import { readFile, mkdir, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { dirname } from "node:path";
 import type { TimestampedUtterance, TimestampedWord } from "../core/types.js";

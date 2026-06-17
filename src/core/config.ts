@@ -56,6 +56,12 @@ export interface PipelineOptions {
   diarizationLevel?: 1 | 2 | 3;
   /** Injected API keys (override env). */
   apiKeys?: ApiKeys;
+  /** Override the multimodal transcription model. */
+  model?: string;
+  /** Override the text-reasoner model (identification pass). */
+  reasoner?: string;
+  /** Timestamped provider. */
+  timestampedProvider?: "assemblyai" | "whisper-groq" | "none";
   /** Force reprocessing of cached chunk outputs. */
   force?: boolean;
   /** Process only a specific chunk index (debugging). */
@@ -113,9 +119,27 @@ export function resolveKeys(injected?: ApiKeys): ApiKeys {
 
 /** Default options merged with user options. */
 export function resolveOptions(opts: PipelineOptions): Required<
-  Omit<PipelineOptions, "instructions" | "knownSpeakers" | "onlyChunk" | "apiKeys">
+  Omit<
+    PipelineOptions,
+    | "instructions"
+    | "knownSpeakers"
+    | "onlyChunk"
+    | "apiKeys"
+    | "model"
+    | "reasoner"
+    | "timestampedProvider"
+  >
 > &
-  Pick<PipelineOptions, "instructions" | "knownSpeakers" | "onlyChunk" | "apiKeys"> {
+  Pick<
+    PipelineOptions,
+    | "instructions"
+    | "knownSpeakers"
+    | "onlyChunk"
+    | "apiKeys"
+    | "model"
+    | "reasoner"
+    | "timestampedProvider"
+  > {
   return {
     input: opts.input,
     outputDir: opts.outputDir,

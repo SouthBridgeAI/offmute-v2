@@ -36,6 +36,7 @@ program
   .option("--formats <list>", "output formats: srt,md,json", "srt,md,json")
   .option("--level <1|2|3>", "diarization level (1=separation, 2=consistent, 3=identify)", "2")
   .option("--model <name>", "override transcription model")
+  .option("--reasoner <name>", "override text-reasoner model (default deepseek-chat)")
   .option("--timestamped <provider>", "timestamped provider (assemblyai|whisper-groq|none)")
   .option("--force", "force reprocess cached chunk outputs", false)
   .option("--only-chunk <n>", "process only a specific chunk index (debug)")
@@ -67,6 +68,9 @@ transcribe({
   screenshotCount: parseInt(opts.screenshots, 10),
   formats: opts.formats.split(","),
   diarizationLevel: level,
+  model: opts.model,
+  reasoner: opts.reasoner,
+  timestampedProvider: opts.timestamped,
   force: opts.force,
   onlyChunk: opts.onlyChunk ? parseInt(opts.onlyChunk, 10) : undefined,
   saveIntermediates: opts.saveIntermediates,
