@@ -46,10 +46,17 @@ program
 program.parse();
 const opts = program.opts();
 
+const input = program.args[0];
+if (!input) {
+  console.error("Error: input file is required.");
+  process.exit(1);
+}
+
 const passes = (opts.passes as string | undefined)?.split(",") as Pass[] | undefined;
+const level = parseInt(opts.level, 10) as 1 | 2 | 3;
 
 transcribe({
-  input: program.args[0],
+  input,
   outputDir: opts.output,
   intermediatesDir: opts.intermediates,
   instructions: opts.instructions,
@@ -59,7 +66,7 @@ transcribe({
   concurrency: parseInt(opts.concurrency, 10),
   screenshotCount: parseInt(opts.screenshots, 10),
   formats: opts.formats.split(","),
-  diarizationLevel: parseInt(opts.level, 10),
+  diarizationLevel: level,
   force: opts.force,
   onlyChunk: opts.onlyChunk ? parseInt(opts.onlyChunk, 10) : undefined,
   saveIntermediates: opts.saveIntermediates,

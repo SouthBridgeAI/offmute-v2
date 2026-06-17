@@ -150,7 +150,7 @@ export function planChunks(
   let start = 0;
   let index = 0;
   while (start < totalDuration) {
-    let end = Math.min(start + chunkDuration, totalDuration);
+    const end = Math.min(start + chunkDuration, totalDuration);
     const overlapWithPrevious = index === 0 ? 0 : Math.min(overlap, end - start);
     // If the last chunk would be very short, merge into previous.
     if (end === totalDuration && end - start < chunkDuration / 3 && chunks.length > 0) {

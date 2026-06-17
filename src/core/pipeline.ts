@@ -3,9 +3,9 @@
  * implemented in the build phase per the spec (see docs/spec.md).
  */
 import { resolveKeys, resolveOptions } from "./config.js";
+import type { PipelineOptions } from "./config.js";
 import { logger } from "../utils/logger.js";
-import type { PipelineOptions, TranscriptResult } from "./config.js";
-import type { Segment, TranscriptMetadata } from "./types.js";
+import type { Segment, TranscriptMetadata, TranscriptResult } from "./types.js";
 
 /**
  * Run the full transcription pipeline.
