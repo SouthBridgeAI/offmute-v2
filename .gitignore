@@ -5,9 +5,10 @@ node_modules/
 dist/
 *.tsbuildinfo
 
-# runtime intermediates (keep dir, ignore contents)
+# runtime intermediates (keep dir, ignore contents) — except the process log
 intermediates/*
 !intermediates/.gitkeep
+!intermediates/process_log_thoughts_ideas_hypotheses_and_scratch_space.md
 
 # test outputs / scratch
 scratch/
