@@ -192,6 +192,8 @@ export interface AlignedToken {
   start: number | null;
   end: number | null;
   matched: boolean;
+  /** ASR speaker label of the matched word (for voice-anchored identity) */
+  asrSpeaker?: string;
 }
 
 /** Something with text we can tokenize (an LLM turn). */
@@ -229,6 +231,7 @@ export function alignLlmToAsr(turns: HasText[], asrWords: TimedWord[]): AlignedT
       tok.start = w.start;
       tok.end = w.end;
       tok.matched = true;
+      if (w.speaker) tok.asrSpeaker = w.speaker;
     }
     ti = p.ai;
   }
@@ -374,6 +377,26 @@ export function buildSegmentsFromTokens(
     flush();
   }
   return segments;
+}
+
+/**
+ * For each LLM turn label, count which ASR speakers its matched words belong to.
+ * Used for voice-anchored speaker canonicalization (labels sharing a dominant ASR
+ * speaker are likely the same person, even if the LLM labeled them inconsistently).
+ */
+export function asrSpeakerByLabel(
+  tokens: AlignedToken[],
+  labelByTurn: string[]
+): Record<string, Record<string, number>> {
+  const out: Record<string, Record<string, number>> = {};
+  for (const tok of tokens) {
+    if (!tok.matched || !tok.asrSpeaker) continue;
+    const label = labelByTurn[tok.turnIndex];
+    if (label === undefined) continue;
+    (out[label] ??= {});
+    out[label]![tok.asrSpeaker] = (out[label]![tok.asrSpeaker] ?? 0) + 1;
+  }
+  return out;
 }
 
 function makeSegment(turnIndex: number, toks: AlignedToken[]): AlignedSegment {
