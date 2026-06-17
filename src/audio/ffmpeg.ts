@@ -24,7 +24,7 @@ export interface ProbeResult {
 function run(
   cmd: string,
   args: string[],
-  opts: { captureStderr?: boolean } = {},
+  _opts: { captureStderr?: boolean } = {},
 ): Promise<{ stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
     const child = spawn(cmd, args, { stdio: ["ignore", "pipe", "pipe"] });

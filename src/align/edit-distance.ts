@@ -75,7 +75,7 @@ export function alignWords(llm: AlignToken[], asr: AlignToken[]): AlignResult {
   while (i > 0 || j > 0) {
     const cur = dp[i]!;
     if (i > 0 && j > 0) {
-      const { cost, fuzzy: fz } = matchCost(llm[i - 1]!, asr[j - 1]!);
+      const { cost } = matchCost(llm[i - 1]!, asr[j - 1]!);
       const sub = dp[i - 1]![j - 1]! + cost;
       if (cur[j]! === sub) {
         if (cost === 0) {

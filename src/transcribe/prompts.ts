@@ -68,7 +68,7 @@ export function transcriptionPrompt(ctx: ChunkContext): string {
   parts.push("- speaker: a label. Use an identified name/role from the roster if you are confident who is speaking; otherwise use 'Speaker A', 'Speaker B', etc. Keep labels CONSISTENT across the chunk.");
   parts.push("- start, end: relative timestamps as mm:ss, where 00:00 is the START of this audio chunk. They must be monotonic and span the full chunk.");
   parts.push("- text: the verbatim words, including fillers (um, uh), false starts, and corrections. Do not paraphrase.");
-  parts.push("- tone: array of behavior/emotion tags (e.g. hesitant, laughing, contemplating, urgent, sarcastic, whispering). Empty if neutral.");
+  parts.push("- tone: array of behavior/emotion tags. Tag most segments — e.g. confident, hesitant, laughing, sarcastic, urgent, contemplative, whispering, emphatic, questioning, joking, frustrated. Use an empty array ONLY when nothing stands out.");
   parts.push("");
   parts.push("Rules:");
   parts.push("- Cover the ENTIRE audio with no gaps. Timestamps must be monotonic non-decreasing.");
