@@ -94,8 +94,16 @@ function transferTiming(
       }
     }
     if (prevEnd !== null && nextStart !== null) {
+      // Bound the run to the current segment so interpolation doesn't bleed across
+      // a segment boundary.
+      const segIdx = llm[k]!.segIdx;
       let runLen = 0;
-      for (let r = k; r < times.length && isNaN(times[r]!.start); r++) runLen++;
+      for (
+        let r = k;
+        r < times.length && isNaN(times[r]!.start) && llm[r]!.segIdx === segIdx;
+        r++
+      )
+        runLen++;
       const step = (nextStart - prevEnd) / (runLen + 1);
       for (let r = 0; r < runLen; r++) {
         const pt = prevEnd + step * (r + 1);
@@ -151,7 +159,7 @@ export function alignSegments(
   if (margin > 0) {
     const lo = sorted[0]!.s.startSec - margin;
     const hi = sorted[sorted.length - 1]!.s.endSec + margin;
-    asr = asr.filter((w) => w.start >= lo - 1 && w.start <= hi + 60);
+    asr = asr.filter((w) => w.end >= lo && w.start <= hi);
   }
 
   const result = alignWords(flat, asr);

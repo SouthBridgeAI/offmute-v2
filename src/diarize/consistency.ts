@@ -41,6 +41,7 @@ export function assignGlobalSpeakers(
   const out = segments.map((seg) => ({ seg, asrSpeaker: "" }));
   const labelVotes: Record<string, Record<string, number>> = {}; // asrSpeaker -> {llmLabel: count}
 
+  const asrDuration: Record<string, number> = {}; // ASR speaker → talk duration (for ordering)
   for (const o of out) {
     let bestSpeaker = "";
     let bestOverlap = 0;
@@ -51,7 +52,23 @@ export function assignGlobalSpeakers(
         bestSpeaker = u.speaker;
       }
     }
-    o.asrSpeaker = bestSpeaker || asrUtterances[0]?.speaker || "speaker_?";
+    if (!bestSpeaker) {
+      // No time overlap (segment landed in a gap): pick the NEAREST utterance by time,
+      // not utterances[0] — otherwise we'd misattribute to an unrelated speaker.
+      let bestDist = Infinity;
+      const segMid = (o.seg.start + o.seg.end) / 2;
+      for (const u of asrUtterances) {
+        const uMid = (u.start + u.end) / 2;
+        const d = Math.abs(uMid - segMid);
+        if (d < bestDist) {
+          bestDist = d;
+          bestSpeaker = u.speaker;
+        }
+      }
+      bestSpeaker = bestSpeaker || "speaker_?";
+    }
+    o.asrSpeaker = bestSpeaker;
+    asrDuration[o.asrSpeaker] = (asrDuration[o.asrSpeaker] ?? 0) + Math.max(bestOverlap, 0.1);
     labelVotes[o.asrSpeaker] ??= {};
     labelVotes[o.asrSpeaker]![o.seg.speaker] =
       (labelVotes[o.asrSpeaker]![o.seg.speaker] ?? 0) + 1;
@@ -67,7 +84,7 @@ export function assignGlobalSpeakers(
   // Merge ASR speakers that share a SPECIFIC dominant label (same person, ASR over-split).
   const asrToGroup: Record<string, string> = {};
   const groupLabel: Record<string, string> = {};
-  const groupTalk: Record<string, number> = {};
+  const groupTalk: Record<string, number> = {}; // group → total talk DURATION
   for (const asrSp of Object.keys(labelVotes)) {
     const label = dominantLabel[asrSp] ?? asrSp;
     let groupId: string | undefined;
@@ -80,8 +97,7 @@ export function assignGlobalSpeakers(
       groupLabel[groupId] = label;
     }
     asrToGroup[asrSp] = groupId;
-    const talk = Object.entries(labelVotes[asrSp]!).reduce((a, [, c]) => a + c, 0);
-    groupTalk[groupId] = (groupTalk[groupId] ?? 0) + talk;
+    groupTalk[groupId] = (groupTalk[groupId] ?? 0) + (asrDuration[asrSp] ?? 0);
   }
 
   // Assign global ids "Speaker A", "Speaker B", … by talk time (desc).

@@ -4,108 +4,143 @@ Best-in-class diarized meeting transcription. A video/audio file (plus optional
 instructions) goes in; a **timestamp-correct, diarized transcript with tone/behavior
 labels** comes out — as SRT, Markdown, and JSON.
 
-> **Status: scaffolding + research phase.** See
-> `intermediates/process_log_thoughts_ideas_hypotheses_and_scratch_space.md` for the
-> living record of hypotheses, findings, and gotchas. Re-read both when context
-> compresses.
+Runs as an **npx CLI**, a **Node library**, and **in the browser**.
 
-## The idea
+> Living context: `intermediates/process_log_thoughts_ideas_hypotheses_and_scratch_space.md`
+> (hypotheses, findings, gotchas) and `docs/spec.md` (design). Re-read when context compresses.
 
-Combine two complementary strengths (the three `inspirations/` projects each had
-only one):
+## Results (verified on test-files/1: 32min talk + audience Q&A)
 
-- **Multimodal LLMs** (Gemini, GPT-4o-audio) understand tone, mix video+audio
-  context, diarize through interruptions, and listen in crowded rooms — but their
-  timestamps are coarse. *(offmute does this, but can't do SRTs/timestamps.)*
-- **Timestamped transcribers** (AssemblyAI, Whisper) give accurate word-level
-  timestamps and clean speaker separation — but no tone, no context, no
-  identification. *(meeting-diary does this.)*
+End-to-end pipeline vs the hand-checked reference SRT (38 entries):
 
-`ipgu` contributed the timestamp mechanics (relative→absolute adjustment, overlap
-resolution, XML structured output, robust parsing, retries). offmute-v2 unifies all
-of it and fixes the shared weakness: **chunking and overlap handling**.
+| metric | result |
+|---|---|
+| word accuracy (WER) | **86.5%** (WER 0.135) |
+| reference coverage | **38/38** entries covered |
+| boundary timing | **median 0.00s, p90 2.16s** |
+| speaker accuracy | **94%** |
+| alignment | 326/326 segments aligned to ASR word timing |
 
-## Pipeline (target)
+Speaker diarization correctly separates the presenter (named **Rishi** via the
+identification pass) from 3 audience questioners, merging an AssemblyAI over-split of
+the presenter into two speakers.
+
+## How it works
+
+A **hybrid** of two complementary strengths (the `inspirations/` projects each had one):
+
+- **Multimodal LLM** (Gemini) → best *content*: verbatim text, tone, diarization through
+  interruptions, speaker identification via context. Coarse timestamps only.
+- **Timestamped transcriber** (AssemblyAI Universal-2) → best *timing*: word-accurate
+  timestamps + clean speaker separation over the whole file. No tone/context.
 
 ```
-preprocess ──▶ describe ──▶ LLM-transcribe (per chunk, diarized, tone, rel. ts)
-   (audio+          │              │
-   keyframes)       │              ▼
-                    │      ┌─── timestamped-transcribe (AssemblyAI/Whisper, whole file)
-                    │      │              │
-                    │      │              ▼
-                    └──────┴─────▶ align (fuzzy/embedding: LLM text ↔ accurate ts)
-                                          │
-                                          ▼
-                          speaker-consistency ──▶ speaker-identify (optional)
-                                          │
-                                          ▼
-                              finalize (overlap fix, clamp, format SRT/MD/JSON)
+preprocess → describe → llm-transcribe (per chunk) → timestamped (whole file)
+                                                              ↓
+                            align (edit-distance: LLM text ↔ ASR word times)
+                                                              ↓
+                            consistency (merge ASR over-splits via LLM labels)
+                                                              ↓
+                            identify (optional, DeepSeek: name speakers from content)
+                                                              ↓
+                            finalize (dedup, overlap fix, clamp, format SRT/MD/JSON)
 ```
 
-Every stage writes intermediates to disk and is resumable.
+**The alignment** is the key idea (ts-aligner approach): align the whole chunk's LLM
+token stream against the ASR word stream in one edit-distance DP pass, then split back
+into segments — long ordered sequences pin common words unambiguously and transfer
+accurate word timestamps onto the richer LLM text.
 
-## Diarization levels (selectable)
+## Diarization levels (selectable via `--level`)
 
-1. **Separation** — who speaks when.
-2. **Anonymous-but-consistent** — Speaker A/B throughout.
-3. **Identification** — named speakers via context (multi-pass).
+1. **Separation** — who speaks when (ASR speakers).
+2. **Anonymous-but-consistent** — Speaker A/B throughout (ASR speakers merged by LLM label; default).
+3. **Identification** — named speakers via content cues (DeepSeek).
 
-## Model assignment
+## Usage
 
-- Multimodal transcription (needs ears): **Gemini 2.5 Pro/Flash** primary.
-- Timestamped transcription: **AssemblyAI** primary; Whisper (Groq/OpenAI) fallback.
-- Text reasoning passes (ID, consistency, refinement): **DeepSeek** (cheap reasoner).
-- DeepSeek cannot hear audio — text passes only.
-
-Keys come from the environment (or are injected). See `src/core/config.ts`.
-
-## Usage (once built)
-
+### npx CLI
 ```bash
-# CLI
-npx offmute-v2 path/to/meeting.mov --model gemini-2.5-pro --instructions "..."
-npx offmute-v2 meeting.mov --passes transcribe,align,identify --format srt,md
+export GEMINI_API_KEY=...         # multimodal transcription
+export ASSEMBLYAI_API_KEY=...     # timestamped transcription
+export DEEPSEEK_API_KEY=...       # optional, for --level 3 identification
 
-# Library
-import { transcribe } from "offmute-v2";
-const result = await transcribe("meeting.mov", { /* options */ });
+npx offmute-v2 meeting.mov                          # default: flash model, level 2
+npx offmute-v2 meeting.mov --model gemini-2.5-pro   # higher quality
+npx offmute-v2 meeting.mov --level 3                # name speakers
+npx offmute-v2 meeting.mov -i "focus on action items, note accents"
+npx offmute-v2 meeting.mov --passes align,consistency,finalize   # resume from intermediates
+npx offmute-v2 meeting.mov --only-chunk 2           # debug one chunk
 ```
 
-## Project layout
+Key options: `--passes`, `--level <1|2|3>`, `--model`, `--formats srt,md,json`,
+`--chunk-seconds`, `--overlap-seconds`, `--concurrency`, `--instructions`, `--force`,
+`--only-chunk`, `--reasoner`.
+
+### Node library
+```ts
+import { transcribe } from "offmute-v2";
+const result = await transcribe("meeting.mov", {
+  model: "gemini-2.5-flash",
+  level: 3,
+  instructions: "...",
+  apiKeys: { gemini: "...", assemblyai: "...", deepseek: "..." }, // injectable
+  formats: ["srt", "md", "json"],
+});
+// result.segments: Segment[], result.speakers: SpeakerInfo[]
+```
+
+### Browser
+```ts
+import { transcribeBrowser } from "offmute-v2/browser";
+// audio = mono Blob (extract from video via ffmpeg.wasm first)
+const result = await transcribeBrowser({
+  audio, geminiApiKey, assemblyaiApiKey,
+  model: "gemini-2.5-flash", level: 3, deepseekApiKey,
+});
+```
+The core (align/consistency/identify/finalize/format) is pure TS with no node deps and
+bundles to ~35KB with zero node-only imports. The browser build uses fetch-based
+providers (Gemini inline base64 + AssemblyAI REST). Best for audio ≤ ~20MB inline; for
+longer files, chunk with ffmpeg.wasm and call the stages directly.
+
+## Architecture
 
 ```
 src/
-  core/      types, config, pipeline orchestrator
-  audio/     ffmpeg wrapper, chunking (silence-aware overlap dedup)
-  providers/ gemini, deepseek, assemblyai, whisper (+ OpenAI-compat)
-  transcribe/ llm transcription + prompts + structured-output parser
-  align/     fuzzy/embedding alignment of LLM text ↔ timestamps
-  diarize/   speaker-consistency + identification passes
-  finalize/  overlap resolution, timing clamp, SRT/MD/JSON formatting
-  utils/     fs, time, srt, logger
-scripts/     one-off test scripts per pipeline part
-tests/       unit tests (vitest)
+  core/      types, config (models, key resolution, chunk planning), pipeline
+  audio/     ffmpeg wrapper (probe, audio, chunk, scene-aware keyframes, silence)
+  providers/ gemini (SDK), gemini-fetch + assemblyai-fetch (browser), openai-compat (DeepSeek/Groq)
+  transcribe/ llm transcription (prompt + JSON schema), describe (roster)
+  align/     normalize, edit-distance DP, aligner (flat-sequence alignment)
+  diarize/   consistency (merge by LLM label), identify (DeepSeek naming)
+  finalize/  dedup, overlap fix + clamp, format (SRT/MD/JSON with block-breaking)
+  eval/      scorer (WER, coverage, timing, speaker agreement vs reference)
+  utils/     time, srt, logger
+scripts/     per-stage test scripts + eval
+tests/       vitest unit tests (align, finalize)
 ```
+
+Every pipeline stage persists intermediates to disk and is **resumable** (skips work
+whose output exists unless `--force`); the run is **stoppable** — results so far are
+always on disk.
 
 ## Development
-
 ```bash
 npm install
-npm run typecheck   # tsc --noEmit
-npm run lint
-npm test            # vitest
-npm run dev         # tsx src/cli.ts
-npm run build       # tsup → dist/
+npm run typecheck && npm run lint && npm test   # 16 unit tests
+npm run dev    # tsx src/cli.ts
+npm run build  # tsup → dist/ (node + browser bundles)
 ```
 
-## Testing & eval
+## Requirements
+- Node ≥ 20, ffmpeg/ffprobe in PATH.
+- API keys: `GEMINI_API_KEY` (or `GOOGLE_API_KEY`), `ASSEMBLYAI_API_KEY`. `DEEPSEEK_API_KEY` optional (level 3).
 
-Ground truth: `test-files/1/talk-with-questions.mov` + `.srt` (Hrishi + Audience,
-~32min). An eval scorer (text WER, timing error, speaker-label accuracy) compares
-output ↔ reference so we know when a pass fails. `test-files/2` (Satya Nadella
-podcast, ~41min, no ref) for multi-speaker smoke tests.
+## Eval
+```bash
+npx tsx scripts/eval.ts output/run1/talk-with-questions.json   # vs test-files/1 reference SRT
+```
 
 ## License
-
 Apache-2.0.

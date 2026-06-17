@@ -71,9 +71,11 @@ export function fixOverlaps(segments: Segment[]): Segment[] {
           changed = true;
         } else {
           // Can't shorten without violating min dur; shift next's start to cur.end + gap
-          // only if it doesn't invert next.
+          // only if it keeps next valid AND doesn't overtake the following segment (which
+          // would unsort the array and skip a real overlap).
           const shiftedStart = cur.end + OVERLAP_GAP;
-          if (shiftedStart < next.end - MIN_DUR) {
+          const followingStart = sorted[i + 2]?.start ?? Infinity;
+          if (shiftedStart < next.end - MIN_DUR && shiftedStart < followingStart) {
             next.start = shiftedStart;
             changed = true;
           }
