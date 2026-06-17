@@ -33,6 +33,8 @@ import { describeMeeting, type MeetingDescription } from "../transcribe/describe
 import { transcribeChunk, type ParsedLlmSegment, type ChunkTranscriptionResult } from "../transcribe/llm-transcribe.js";
 import { alignSegments, type AlignedSegment } from "../align/aligner.js";
 import { assignGlobalSpeakers } from "../diarize/consistency.js";
+import { identifySpeakers } from "../diarize/identify.js";
+import { OpenAICompatClient } from "../providers/openai-compat.js";
 import { finalizeSegments } from "../finalize/finalize.js";
 import { formatSrt, formatMarkdown, formatJson } from "../finalize/format.js";
 import { basename } from "node:path";
@@ -261,6 +263,33 @@ export async function transcribe(opts: PipelineOptions): Promise<TranscriptResul
       segments = c.segments;
       speakers = c.speakers;
     }
+  }
+
+  // ---------- 6.5 IDENTIFY (level 3) ----------
+  if (
+    options.diarizationLevel >= 3 &&
+    has(passes, "identify") &&
+    keys.deepseek &&
+    description
+  ) {
+    logger.info("=== identify (DeepSeek) ===");
+    const dsClient = OpenAICompatClient.fromProvider("deepseek", keys.deepseek, models.reasoner);
+    const id = await identifySpeakers(
+      dsClient,
+      models.reasoner,
+      segments.map((s) => ({ speaker: s.speaker, text: s.text })),
+      speakers,
+      description.roster,
+      options.knownSpeakers,
+    );
+    logger.info(`identified ${Object.keys(id.nameMap).length} speakers: ${JSON.stringify(id.nameMap)}`);
+    writeJson(`${options.intermediatesDir}/identified.json`, id);
+    segments = segments.map((s) =>
+      id.nameMap[s.speaker] ? { ...s, speakerName: id.nameMap[s.speaker] } : s,
+    );
+    speakers = speakers.map((sp) =>
+      id.nameMap[sp.id] ? { ...sp, name: id.nameMap[sp.id] } : sp,
+    );
   }
 
   // ---------- 7. FINALIZE ----------

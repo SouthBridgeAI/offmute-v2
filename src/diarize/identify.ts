@@ -5,7 +5,13 @@
  * self-identify in only one chunk, so the reasoner must see the whole transcript.
  */
 import { OpenAICompatClient } from "../providers/openai-compat.js";
-import type { Segment, SpeakerInfo } from "../core/types.js";
+import type { SpeakerInfo } from "../core/types.js";
+
+/** Minimal segment shape needed for identification. */
+export interface IdentifySegment {
+  speaker: string;
+  text: string;
+}
 
 export interface IdentifiedSpeaker {
   id: string;
@@ -20,10 +26,10 @@ export interface IdentifyResult {
   reasoning: string;
 }
 
-function buildTranscriptExcerpt(segments: Segment[], speakers: SpeakerInfo[]): string {
+function buildTranscriptExcerpt(segments: IdentifySegment[], speakers: SpeakerInfo[]): string {
   // Give the reasoner a representative sample per speaker: their longest segments
   // (most likely to contain identification cues), plus overall flow.
-  const bySpeaker: Record<string, Segment[]> = {};
+  const bySpeaker: Record<string, IdentifySegment[]> = {};
   for (const s of segments) (bySpeaker[s.speaker] ??= []).push(s);
   const parts: string[] = [];
   for (const sp of speakers) {
@@ -37,7 +43,7 @@ function buildTranscriptExcerpt(segments: Segment[], speakers: SpeakerInfo[]): s
 }
 
 export function identifyPrompt(transcriptExcerpt: string, roster: string, knownSpeakers?: string[]): string {
-  return `You are identifying speakers in a transcribed recording. Below are the most substantial quotes from each speaker (labeled speaker_A, speaker_B, etc.), plus a roster description.
+  return `You are identifying speakers in a transcribed recording. Below are the most substantial quotes from each speaker (labeled exactly as shown in the headers, e.g. "Speaker A"), plus a roster description.
 
 Identify each speaker by name and/or role using content cues: self-introductions ("my name is X"), references to themselves, their role, or context. If you cannot confidently identify a speaker, leave the name empty ("").
 
@@ -47,14 +53,15 @@ ${roster}
 TRANSCRIPT EXCERPTS BY SPEAKER:
 ${transcriptExcerpt}
 
-Respond as JSON: { "speakers": [ { "id": "speaker_A", "name": "Full Name or Role", "confidence": "high|medium|low", "evidence": "short quote/reason" } ], "reasoning": "one-paragraph summary" }`;
+Respond as JSON: { "speakers": [ { "id": "<exact speaker id from the headers>", "name": "Full Name or Role", "confidence": "high|medium|low", "evidence": "short quote/reason" } ], "reasoning": "one-paragraph summary" }
+Use the EXACT speaker id strings from the headers above (e.g. "Speaker A").`;
 }
 
 /** Identify speakers via a text reasoner. Returns a name map (speaker id → name). */
 export async function identifySpeakers(
   client: OpenAICompatClient,
   model: string,
-  segments: Segment[],
+  segments: IdentifySegment[],
   speakers: SpeakerInfo[],
   roster: string,
   knownSpeakers?: string[],
