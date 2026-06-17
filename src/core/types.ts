@@ -51,6 +51,14 @@ export interface ChunkPlan {
   path?: string;
 }
 
+/** A single word with accurate timing (from a timestamped transcriber). */
+export interface TimestampedWord {
+  text: string;
+  start: number; // seconds
+  end: number; // seconds
+  confidence?: number;
+}
+
 /** A speaker as understood by a timestamped diarizer (AssemblyAI/Whisper). */
 export interface TimestampedUtterance {
   start: number;
@@ -58,6 +66,7 @@ export interface TimestampedUtterance {
   speaker: string;
   text: string;
   confidence?: number;
+  words?: TimestampedWord[];
 }
 
 /** The full result of running the pipeline. */
