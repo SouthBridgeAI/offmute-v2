@@ -91,7 +91,9 @@ export async function transcribe(
   progress("probe", `Probing ${basename(input)}`);
   const info = await inter.cachedJSON("media-info.json", cache, () => probeMedia(input));
   const isVideo = info.hasVideo && VIDEO_EXT.has(extname(input).toLowerCase());
-  const useVideo = options.useVideo ?? isVideo;
+  // Never attempt video work without an actual video stream (e.g. audio .m4a, even
+  // if the caller/CLI passed useVideo: true).
+  const useVideo = (options.useVideo ?? isVideo) && info.hasVideo;
 
   // 2. Preprocess audio --------------------------------------------------
   progress("preprocess", "Extracting 16k mono audio");
@@ -105,18 +107,24 @@ export async function transcribe(
   if (useVideo && keyframeCount > 0) {
     progress("preprocess", `Extracting ${keyframeCount} keyframes`);
     const kfDir = inter.path("keyframes");
-    if (!cache || !existsSync(kfDir)) {
-      keyframePaths = await extractKeyframes(input, kfDir, {
-        count: keyframeCount,
-        durationSeconds: info.durationSeconds,
-      });
-    } else {
-      // reuse existing
-      const { readdirSync } = await import("node:fs");
-      keyframePaths = readdirSync(kfDir)
-        .filter((f) => f.endsWith(".jpg"))
-        .sort()
-        .map((f) => join(kfDir, f));
+    try {
+      if (!cache || !existsSync(kfDir)) {
+        keyframePaths = await extractKeyframes(input, kfDir, {
+          count: keyframeCount,
+          durationSeconds: info.durationSeconds,
+        });
+      } else {
+        // reuse existing
+        const { readdirSync } = await import("node:fs");
+        keyframePaths = readdirSync(kfDir)
+          .filter((f) => f.endsWith(".jpg"))
+          .sort()
+          .map((f) => join(kfDir, f));
+      }
+    } catch (e) {
+      // degrade gracefully — no usable video frames (e.g. cover-art-only stream)
+      progress("preprocess", `Skipping keyframes (${(e as Error).message.slice(0, 60)})`);
+      keyframePaths = [];
     }
   }
 
