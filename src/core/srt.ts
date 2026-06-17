@@ -28,6 +28,8 @@ export function splitSpeakerPrefix(text: string): {
   const prefix = text.slice(0, idx).trim();
   const rest = text.slice(idx + 1).trim();
   if (!rest) return { body: text };
+  // reject a numeric / timecode prefix ("12:34 ...", "5 ...") — not a speaker
+  if (/^\d+$/.test(prefix) || /^\d{1,2}(:\d{2})+$/.test(prefix)) return { body: text };
   // reject if prefix contains sentence-ending punctuation or is too "wordy"
   if (/[.!?]/.test(prefix)) return { body: text };
   const wordCount = prefix.split(/\s+/).length;
@@ -49,9 +51,9 @@ export function parseSrt(content: string): SrtCue[] {
     const lines = block.split("\n").filter((l) => l.trim().length > 0);
     if (lines.length === 0) continue;
 
-    // find the timing line (may be line 0 if no numeric id)
+    // find the timing line (usually line 0 or 1, but scan all to tolerate noise)
     let timingLineIdx = -1;
-    for (let i = 0; i < Math.min(lines.length, 2); i++) {
+    for (let i = 0; i < lines.length; i++) {
       if (TIMING_RE.test(lines[i]!)) {
         timingLineIdx = i;
         break;

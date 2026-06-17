@@ -221,7 +221,6 @@ export function alignLlmToAsr(turns: HasText[], asrWords: TimedWord[]): AlignedT
     asrNorm
   );
 
-  let ti = 0; // index into `tokens` as we walk the alignment
   for (const p of pairs) {
     if (p.ai === null) continue; // ASR-only word (gap in LLM) — ignore
     // p.ai indexes the llm token array (same order as `tokens`)
@@ -233,9 +232,7 @@ export function alignLlmToAsr(turns: HasText[], asrWords: TimedWord[]): AlignedT
       tok.matched = true;
       if (w.speaker) tok.asrSpeaker = w.speaker;
     }
-    ti = p.ai;
   }
-  void ti;
   return tokens;
 }
 
@@ -366,7 +363,10 @@ export function buildSegmentsFromTokens(
       const curStart = cur[0]!.start ?? 0;
       const curEnd = tok.end ?? curStart;
       const dur = curEnd - curStart;
-      const gapToNext = next && next.start !== null && tok.end !== null ? next.start - tok.end : 0;
+      // Only trust the inter-token gap when BOTH tokens are real ASR matches —
+      // interpolated tokens are spread evenly and would trigger spurious splits.
+      const bothMatched = tok.matched && (next?.matched ?? false);
+      const gapToNext = bothMatched && next && next.start !== null && tok.end !== null ? next.start - tok.end : 0;
 
       const sentenceBreak = SENTENCE_END.test(tok.surface) && curChars >= minChars;
       const tooLong = curChars >= maxChars || dur >= maxDuration;

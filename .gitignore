@@ -33,3 +33,8 @@ runs/
 *.log
 .idea/
 .vscode/
+
+# Scratch / review-agent probe files
+_bug_probe*
+_tmp*
+scratch_*

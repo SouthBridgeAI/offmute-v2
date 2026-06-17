@@ -52,7 +52,11 @@ export function alignTurnsToSegments(
   const segments: PlainSegment[] = [];
   const toneSeen = new Set<number>();
   for (const s of aligned) {
-    if (s.matchedTokens === 0) continue; // drop hallucinated/word-less "turns" (applause)
+    // Drop only SHORT word-less segments (applause/laughter/noise annotations).
+    // Keep substantial zero-match turns — real speech the ASR missed (quiet,
+    // overlapping, near a chunk edge). They carry interpolated times and
+    // matchRatio 0 so downstream can flag them as low-confidence.
+    if (s.matchedTokens === 0 && s.tokenCount <= 3) continue;
     const turn = turns[s.turnIndex]!;
     const firstOfTurn = !toneSeen.has(s.turnIndex);
     toneSeen.add(s.turnIndex);

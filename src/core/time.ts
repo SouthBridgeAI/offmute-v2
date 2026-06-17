@@ -2,7 +2,7 @@
 
 /** seconds -> "HH:MM:SS,mmm" (SRT style, comma decimal). */
 export function secondsToSrtTime(seconds: number): string {
-  const s = Math.max(0, seconds);
+  const s = Number.isFinite(seconds) ? Math.max(0, seconds) : 0;
   const hours = Math.floor(s / 3600);
   const minutes = Math.floor((s % 3600) / 60);
   const secs = Math.floor(s % 60);

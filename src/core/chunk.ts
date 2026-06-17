@@ -13,7 +13,11 @@ export function calculateChunks(
   if (totalSeconds <= chunkSeconds) {
     return [{ index: 0, startSeconds: 0, endSeconds: totalSeconds }];
   }
-  const step = Math.max(1, chunkSeconds - overlapSeconds);
+  // Clamp overlap to [0, 50% of chunk]: negative overlap leaves uncovered gaps;
+  // overlap near/over the chunk size collapses the step and explodes the chunk
+  // count. Real overlaps are small (~10-15%), so this only catches misconfig.
+  const overlap = Math.max(0, Math.min(overlapSeconds, chunkSeconds * 0.5));
+  const step = Math.max(1, chunkSeconds - overlap);
   const chunks: TimeChunk[] = [];
   let start = 0;
   let index = 0;
@@ -57,8 +61,14 @@ export function mergeChunkSegments(
   const kept: MergeableSegment[] = [];
 
   for (const seg of sorted) {
-    // find an already-kept segment that overlaps this one substantially in time
-    const dup = kept.find((k) => timeOverlapRatio(k, seg) > 0.5 && textSimilar(k.text, seg.text));
+    // A genuine duplicate comes from the OVERLAP between two DIFFERENT chunks
+    // (same audio transcribed twice). Two cues from the SAME chunk are distinct
+    // pieces of one turn, never duplicates. Note: we match on time+text, not
+    // speaker label, because the same person can carry different labels across
+    // chunks before the identify pass reconciles them.
+    const dup = kept.find(
+      (k) => k.chunkIndex !== seg.chunkIndex && timeOverlapRatio(k, seg) > 0.5 && textSimilar(k.text, seg.text)
+    );
     if (!dup) {
       kept.push(seg);
       continue;

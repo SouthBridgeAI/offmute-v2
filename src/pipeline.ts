@@ -192,6 +192,12 @@ export async function transcribe(
 
     const turns = parseDiarizedText(text);
     previousTail = turns.slice(-3).map((t) => `${t.speaker}: ${t.text}`).join("\n");
+    // The prompt asks for chunk-RELATIVE timestamps; make them absolute so the
+    // no-ASR fallback (which uses approxStart) orders turns correctly across chunks.
+    // (Alignment ignores approxStart, so the ASR path is unaffected.)
+    if (chunked) {
+      for (const t of turns) if (t.approxStart !== undefined) t.approxStart += ch.startSeconds;
+    }
     allTurns.push(...turns);
 
     if (asr) {
