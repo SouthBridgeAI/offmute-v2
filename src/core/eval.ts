@@ -13,6 +13,8 @@ export interface EvalWord {
   start: number;
   end: number;
   speaker: string;
+  /** true if this is the first word of its source segment (a real boundary) */
+  isBoundary?: boolean;
 }
 
 /** A timed, speaker-labelled segment (cue/turn) → expand to per-word with interpolated times. */
@@ -38,6 +40,7 @@ export function segmentsToWords(segments: TimedSegment[]): EvalWord[] {
         start: seg.start + frac * span,
         end: seg.start + fracEnd * span,
         speaker: seg.speaker,
+        isBoundary: i === 0,
       });
     }
   }
@@ -62,6 +65,11 @@ export interface EvalResult {
   timeP90: number;
   timeMean: number;
   timedMatches: number;
+  /** boundary error: |hyp - ref| at REAL ref cue-start times (clean timing signal) */
+  boundaryMedian: number;
+  boundaryP90: number;
+  boundaryMean: number;
+  boundaryMatches: number;
 }
 
 function percentile(sorted: number[], p: number): number {
@@ -142,13 +150,21 @@ export function evaluateWords(ref: EvalWord[], hyp: EvalWord[]): EvalResult {
 
   // --- Timestamp error over correct matches ---
   const timeErrors: number[] = [];
+  // --- Boundary error: at real ref cue-start words only (clean timing signal) ---
+  const boundaryErrors: number[] = [];
   for (const m of matched) {
     if (!m.correct) continue;
-    timeErrors.push(Math.abs(hyp[m.hi]!.start - ref[m.ri]!.start));
+    const refW = ref[m.ri]!;
+    const hypW = hyp[m.hi]!;
+    timeErrors.push(Math.abs(hypW.start - refW.start));
+    if (refW.isBoundary) boundaryErrors.push(Math.abs(hypW.start - refW.start));
   }
   timeErrors.sort((a, b) => a - b);
+  boundaryErrors.sort((a, b) => a - b);
   const timeMean =
     timeErrors.length > 0 ? timeErrors.reduce((a, b) => a + b, 0) / timeErrors.length : 0;
+  const boundaryMean =
+    boundaryErrors.length > 0 ? boundaryErrors.reduce((a, b) => a + b, 0) / boundaryErrors.length : 0;
 
   return {
     refWords,
@@ -165,5 +181,9 @@ export function evaluateWords(ref: EvalWord[], hyp: EvalWord[]): EvalResult {
     timeP90: percentile(timeErrors, 90),
     timeMean,
     timedMatches: timeErrors.length,
+    boundaryMedian: percentile(boundaryErrors, 50),
+    boundaryP90: percentile(boundaryErrors, 90),
+    boundaryMean,
+    boundaryMatches: boundaryErrors.length,
   };
 }

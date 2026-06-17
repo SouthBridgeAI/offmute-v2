@@ -178,6 +178,221 @@ export function assignTimings(
   });
 }
 
+// ---------------------------------------------------------------------------
+// Token-level alignment (richer API used by the real pipeline)
+// ---------------------------------------------------------------------------
+
+export interface AlignedToken {
+  /** original LLM surface token (with punctuation) */
+  surface: string;
+  norm: string;
+  /** index of the turn this token belongs to */
+  turnIndex: number;
+  /** matched ASR word time (seconds), or null if unmatched (filled by interpolation) */
+  start: number | null;
+  end: number | null;
+  matched: boolean;
+}
+
+/** Something with text we can tokenize (an LLM turn). */
+export interface HasText {
+  text: string;
+}
+
+/**
+ * Align the concatenated LLM turn token stream to ASR words and return every LLM
+ * token tagged with its turn index and matched ASR time (null where unmatched).
+ */
+export function alignLlmToAsr(turns: HasText[], asrWords: TimedWord[]): AlignedToken[] {
+  const tokens: AlignedToken[] = [];
+  turns.forEach((turn, turnIndex) => {
+    for (const surface of tokenize(turn.text)) {
+      const norm = normalizeToken(surface);
+      if (!norm) continue; // skip pure-punctuation tokens for alignment
+      tokens.push({ surface, norm, turnIndex, start: null, end: null, matched: false });
+    }
+  });
+
+  const asrNorm = asrWords.map((w) => normalizeToken(w.text));
+  const pairs = alignTokens(
+    tokens.map((t) => t.norm),
+    asrNorm
+  );
+
+  let ti = 0; // index into `tokens` as we walk the alignment
+  for (const p of pairs) {
+    if (p.ai === null) continue; // ASR-only word (gap in LLM) — ignore
+    // p.ai indexes the llm token array (same order as `tokens`)
+    const tok = tokens[p.ai]!;
+    if (p.match && p.bi !== null) {
+      const w = asrWords[p.bi]!;
+      tok.start = w.start;
+      tok.end = w.end;
+      tok.matched = true;
+    }
+    ti = p.ai;
+  }
+  void ti;
+  return tokens;
+}
+
+/**
+ * Fill null token times by interpolating between matched neighbors. Tokens before
+ * the first match take the first matched start; after the last match take the last
+ * matched end. Returns the same array (mutated).
+ */
+export function fillTokenTimes(tokens: AlignedToken[], totalDuration: number): AlignedToken[] {
+  const n = tokens.length;
+  if (n === 0) return tokens;
+  // find anchor indices
+  const anchors: number[] = [];
+  for (let i = 0; i < n; i++) if (tokens[i]!.matched) anchors.push(i);
+  if (anchors.length === 0) {
+    // no matches at all — spread across whole duration
+    for (let i = 0; i < n; i++) {
+      tokens[i]!.start = (i / n) * totalDuration;
+      tokens[i]!.end = ((i + 1) / n) * totalDuration;
+    }
+    return tokens;
+  }
+  // leading
+  const first = anchors[0]!;
+  for (let i = 0; i < first; i++) {
+    tokens[i]!.start = tokens[first]!.start;
+    tokens[i]!.end = tokens[first]!.start;
+  }
+  // trailing
+  const last = anchors[anchors.length - 1]!;
+  for (let i = last + 1; i < n; i++) {
+    tokens[i]!.start = tokens[last]!.end;
+    tokens[i]!.end = tokens[last]!.end;
+  }
+  // between consecutive anchors
+  for (let a = 0; a < anchors.length - 1; a++) {
+    const lo = anchors[a]!;
+    const hi = anchors[a + 1]!;
+    const t0 = tokens[lo]!.end ?? tokens[lo]!.start ?? 0;
+    const t1 = tokens[hi]!.start ?? t0;
+    const gap = hi - lo;
+    for (let i = lo + 1; i < hi; i++) {
+      const frac = (i - lo) / gap;
+      const t = t0 + frac * (t1 - t0);
+      tokens[i]!.start = t;
+      tokens[i]!.end = t;
+    }
+  }
+  return tokens;
+}
+
+export interface AlignedSegment {
+  turnIndex: number;
+  start: number;
+  end: number;
+  text: string;
+  /** fraction of tokens that matched an ASR word */
+  matchRatio: number;
+  tokenCount: number;
+  matchedTokens: number;
+}
+
+export interface SegmentOptions {
+  /** split into display-sized cues (sentence / gap / length). Default false = one segment per turn. */
+  subSegment?: boolean;
+  /** max characters per display cue */
+  maxChars?: number;
+  /** max seconds per display cue */
+  maxDuration?: number;
+  /** split when the gap before the next token exceeds this (seconds) */
+  gapSplit?: number;
+  /** minimum characters before allowing a sentence-boundary split */
+  minChars?: number;
+}
+
+const SENTENCE_END = /[.!?…]["')\]]?$/;
+
+/**
+ * Group aligned tokens into output segments. Tokens already carry filled times.
+ * One segment per turn by default; if subSegment, cut turns into readable cues.
+ */
+export function buildSegmentsFromTokens(
+  turns: HasText[],
+  tokens: AlignedToken[],
+  options: SegmentOptions = {}
+): AlignedSegment[] {
+  const {
+    subSegment = false,
+    maxChars = 90,
+    maxDuration = 7,
+    gapSplit = 1.0,
+    minChars = 24,
+  } = options;
+
+  // group tokens by turn
+  const byTurn = new Map<number, AlignedToken[]>();
+  for (const t of tokens) {
+    const arr = byTurn.get(t.turnIndex);
+    if (arr) arr.push(t);
+    else byTurn.set(t.turnIndex, [t]);
+  }
+
+  const segments: AlignedSegment[] = [];
+  for (let turnIndex = 0; turnIndex < turns.length; turnIndex++) {
+    const toks = byTurn.get(turnIndex);
+    if (!toks || toks.length === 0) continue;
+
+    if (!subSegment) {
+      segments.push(makeSegment(turnIndex, toks));
+      continue;
+    }
+
+    // accumulate tokens into cues
+    let cur: AlignedToken[] = [];
+    let curChars = 0;
+    const flush = () => {
+      if (cur.length > 0) {
+        segments.push(makeSegment(turnIndex, cur));
+        cur = [];
+        curChars = 0;
+      }
+    };
+    for (let i = 0; i < toks.length; i++) {
+      const tok = toks[i]!;
+      cur.push(tok);
+      curChars += tok.surface.length + 1;
+      const next = toks[i + 1];
+      const curStart = cur[0]!.start ?? 0;
+      const curEnd = tok.end ?? curStart;
+      const dur = curEnd - curStart;
+      const gapToNext = next && next.start !== null && tok.end !== null ? next.start - tok.end : 0;
+
+      const sentenceBreak = SENTENCE_END.test(tok.surface) && curChars >= minChars;
+      const tooLong = curChars >= maxChars || dur >= maxDuration;
+      const bigGap = gapToNext >= gapSplit && curChars >= minChars;
+
+      if (sentenceBreak || tooLong || bigGap) flush();
+    }
+    flush();
+  }
+  return segments;
+}
+
+function makeSegment(turnIndex: number, toks: AlignedToken[]): AlignedSegment {
+  const matched = toks.filter((t) => t.matched);
+  const starts = toks.map((t) => t.start).filter((x): x is number => x !== null);
+  const ends = toks.map((t) => t.end).filter((x): x is number => x !== null);
+  const start = starts.length ? Math.min(...starts) : 0;
+  const end = ends.length ? Math.max(...ends) : start;
+  return {
+    turnIndex,
+    start,
+    end: Math.max(end, start),
+    text: toks.map((t) => t.surface).join(" "),
+    matchRatio: toks.length ? matched.length / toks.length : 0,
+    tokenCount: toks.length,
+    matchedTokens: matched.length,
+  };
+}
+
 /**
  * Fill null start/end values by interpolating from neighbors and enforcing
  * monotonic, non-overlapping order. Mutates and returns the array.
