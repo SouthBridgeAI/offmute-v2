@@ -121,13 +121,21 @@ Keys from env or injected. Stoppable → returns best-so-far.
 
 `core/eval.ts`: WER + word-level speaker accuracy (optimal label mapping) + timestamp error, vs reference SRT. Caveats: reference word-times interpolated within long cues → trust *boundary* error on short cues. Always also **read** the transcript. Track metrics per change in `intermediates/eval/`.
 
-## 12. Build order
+## 12. Build order / status
 
-1. Refactor `align.ts` → per-token time map + sub-segmentation. ✅ next
-2. `pipeline.ts` orchestrator (probe→asr→diarize→align→segment→identify→format) with intermediates+cache.
-3. Output formatters (SRT turn/display, Markdown, JSON).
-4. Speaker-identify pass.
-5. CLI.
-6. Chunking for long files + merge.
-7. Browser entry + ffmpeg.wasm.
-8. README/docs, code review, tighten.
+1. ✅ `align.ts` → per-token time map + sub-segmentation.
+2. ✅ `pipeline.ts` orchestrator (probe→asr→diarize→align→segment→identify→format) + intermediates/cache/resume.
+3. ✅ Output formatters (SRT turn/display, Markdown, JSON, text).
+4. ✅ Speaker-identify pass (LLM merge + voice-anchored canonicalization).
+5. ✅ CLI (`offmute-v2`).
+6. ✅ Chunking for long files + overlap merge (validated: chunked ≈ single-pass).
+7. ✅ Browser entry (pure 32KB `core/assemble.ts` + `browser.ts`). ⏳ ffmpeg.wasm preprocessing + fetch providers left to the host (documented).
+8. ✅ README/docs, fresh-eyes code review applied, retries, 29 tests, strict tsc, tsup build.
+
+### Validated results
+- talk (32min, ground truth): single-pass **WER 8.1% · speaker 98.7% · boundary median 0.04s / p90 0.43s**; chunked WER 8.4% / speaker 99.0% / boundary 0.06s.
+- podcast (41min, unseen, no instructions): auto-identified 5 named speakers correctly, chunked + video.
+
+### Known limitations
+- Chunk overlap merge is heuristic (time + text Jaccard). Principled fix: dedup on global ASR-word-index spans. Empirically clean, deferred.
+- `assignTimings`/`interpolateTimings` (align.ts) superseded by the token path; kept for `scripts/test-align.ts`.
