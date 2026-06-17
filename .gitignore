@@ -1,0 +1,26 @@
+# dependencies
+node_modules/
+
+# build
+dist/
+*.tsbuildinfo
+
+# runtime intermediates (keep dir, ignore contents)
+intermediates/*
+!intermediates/.gitkeep
+
+# test outputs / scratch
+scratch/
+*.log
+
+# os / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+
+# env
+.env
+.env.*
+!.env.example
