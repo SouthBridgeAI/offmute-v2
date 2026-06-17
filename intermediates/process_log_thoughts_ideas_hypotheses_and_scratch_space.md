@@ -425,3 +425,13 @@ WER 0.146 (85.4%) · coverage 38/38 · boundary timing median 0.00s p90 0.68s ·
 · tone 70% · "GPU" recovered · 1 presenter (Presenter (Hrishi)) + 4 audience.
 (WER 0.136→0.146 vs the earlier cached run is within LLM run-to-run variance; boundary
 timing improved p90 2.16s→0.68s.)
+
+### Tested on ~/Downloads/a4/p.m4a (51min audio-only interview, user-provided)
+- 6 chunks → 844 LLM segs → 844/844 aligned → 768 final. AssemblyAI: 2 speakers, 9564 words.
+- Clean 2-speaker diarization (A: 1454s, B: 1321s — balanced interview). 98% tone coverage.
+- Full duration coverage (1.4→3067s of 3071s). 90% aligned timing.
+- Identify (DeepSeek) correctly inferred "CTO role" (Speaker B) + "female voice" (Speaker A)
+  from content but honestly left names empty (no self-introductions) — correct level-3 fallback.
+- BUG FIXED: --level 3 didn't auto-include the identify pass (DEFAULT_PASSES lacks it), so
+  --level 3 alone silently produced level-2 output. resolveOptions now adds "identify" before
+  "finalize" when level >= 3. (test-files/1 earlier only worked because --passes included it.)

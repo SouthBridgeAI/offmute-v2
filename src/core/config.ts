@@ -146,7 +146,19 @@ export function resolveOptions(opts: PipelineOptions): Required<
     intermediatesDir: opts.intermediatesDir,
     instructions: opts.instructions,
     knownSpeakers: opts.knownSpeakers,
-    passes: opts.passes ?? DEFAULT_PASSES,
+    passes: (() => {
+      const p = opts.passes ?? DEFAULT_PASSES;
+      // --level 3 implies the identify pass; --level <=2 strips it.
+      if ((opts.diarizationLevel ?? 2) >= 3 && !p.includes("identify")) {
+        // insert identify before finalize
+        const out = [...p];
+        const fi = out.indexOf("finalize");
+        if (fi >= 0) out.splice(fi, 0, "identify");
+        else out.push("identify");
+        return out;
+      }
+      return p;
+    })(),
     chunkDurationSec: opts.chunkDurationSec ?? 600,
     chunkOverlapSec: opts.chunkOverlapSec ?? 60,
     screenshotCount: opts.screenshotCount ?? 6,
