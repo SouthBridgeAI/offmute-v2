@@ -29,7 +29,7 @@ export interface AlignedSegment {
   text: string; // LLM text preserved
   tone: string[];
   confidence: number; // exact-match ratio in [0,1]
-  timingSource: "aligned" | "interpolated" | "coarse";
+  timingSource: "aligned" | "interpolated" | "coarse" | "timestamped";
   words: AlignedWord[];
   sourceIndex: number;
 }

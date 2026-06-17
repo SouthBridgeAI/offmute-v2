@@ -28,7 +28,7 @@ async function main() {
   const aligned = alignSegments(llmSegs, asrWords);
 
   // Stats
-  const bySource = { aligned: 0, interpolated: 0, coarse: 0 };
+  const bySource = { aligned: 0, interpolated: 0, coarse: 0, timestamped: 0 };
   let confSum = 0;
   for (const a of aligned) {
     bySource[a.timingSource]++;

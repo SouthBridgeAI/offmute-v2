@@ -32,6 +32,7 @@ import { AssemblyAIProvider } from "../providers/assemblyai.js";
 import { describeMeeting, type MeetingDescription } from "../transcribe/describe.js";
 import { transcribeChunk, type ParsedLlmSegment, type ChunkTranscriptionResult } from "../transcribe/llm-transcribe.js";
 import { alignSegments, type AlignedSegment } from "../align/aligner.js";
+import { fillAsrGaps } from "../align/fill-gaps.js";
 import { assignGlobalSpeakers } from "../diarize/consistency.js";
 import { identifySpeakers } from "../diarize/identify.js";
 import { OpenAICompatClient } from "../providers/openai-compat.js";
@@ -247,6 +248,15 @@ export async function transcribe(opts: PipelineOptions): Promise<TranscriptResul
   }
   const alignedOk = aligned.filter((a) => a.timingSource !== "coarse").length;
   logger.info(`aligned: ${alignedOk}/${aligned.length} with ASR timing`);
+
+  // ---------- 5.5 GAP-FILL ----------
+  // Recover content the LLM dropped: insert ASR fallback segments for uncovered speech.
+  if (asrResult && (has(passes, "align") || has(passes, "consistency"))) {
+    const before = aligned.length;
+    aligned = fillAsrGaps(aligned, asrResult.words, asrResult.utterances);
+    const added = aligned.length - before;
+    if (added) logger.info(`gap-filled ${added} ASR fallback segment(s)`);
+  }
 
   // ---------- 6. CONSISTENCY ----------
   let segments = aligned;
