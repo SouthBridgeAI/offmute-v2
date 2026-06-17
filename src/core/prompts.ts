@@ -55,7 +55,9 @@ export function buildDiarizationPrompt(input: DiarizationPromptInput): string {
   }
 
   if (previousTail) {
-    parts.push(`\nThe previous part ended with (for continuity — do NOT repeat these lines):\n...${previousTail}`);
+    parts.push(
+      `\nFor speaker continuity only, the previous part ended with the lines below. The start of THIS clip overlaps the previous part — transcribe EVERYTHING you hear in THIS clip in full (from 0:00), including any overlap; do not skip the beginning:\n...${previousTail}`
+    );
   }
 
   parts.push(`

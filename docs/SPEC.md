@@ -132,10 +132,12 @@ Keys from env or injected. Stoppable → returns best-so-far.
 7. ✅ Browser entry (pure 32KB `core/assemble.ts` + `browser.ts`). ⏳ ffmpeg.wasm preprocessing + fetch providers left to the host (documented).
 8. ✅ README/docs, fresh-eyes code review applied, retries, 29 tests, strict tsc, tsup build.
 
-### Validated results
-- talk (32min, ground truth): single-pass **WER 8.1% · speaker 98.7% · boundary median 0.04s / p90 0.43s**; chunked WER 8.4% / speaker 99.0% / boundary 0.06s.
-- podcast (41min, unseen, no instructions): auto-identified 5 named speakers correctly, chunked + video.
+9. ✅ Browser: `transcribeInBrowser()` (ffmpeg.wasm + isomorphic fetch providers + core), runnable `examples/browser/`, verified end-to-end.
 
-### Known limitations
-- Chunk overlap merge is heuristic (time + text Jaccard). Principled fix: dedup on global ASR-word-index spans. Empirically clean, deferred.
-- `assignTimings`/`interpolateTimings` (align.ts) superseded by the token path; kept for `scripts/test-align.ts`.
+### Chunk overlap = ownership partitioning
+Each chunk owns a contiguous span split at overlap midpoints (`chunkOwnership`); a segment is emitted by the chunk owning its center time, so every word appears exactly once — no fuzzy dedup as the primary mechanism (kept as a safety net). The chunk prompt asks for FULL transcription of each clip (the previous-tail is continuity context only).
+
+### Validated results
+- talk (32min, ground truth): single-pass **WER 8.1% · speaker 98.7% · boundary median 0.04s**; chunked (3×, ownership) **WER 7.7% · speaker 98.9% · boundary 0.05s**.
+- podcast (41min, unseen, no instructions): auto-identified 5 named speakers correctly, chunked + video.
+- browser path (ffmpeg shim, real fetch providers + core): clean diarized SRT with correct timing.

@@ -11,7 +11,7 @@ import { GeminiClient } from "./providers/gemini.js";
 import { buildAsrHint, buildDiarizationPrompt, DIARIZATION_SYSTEM } from "./core/prompts.js";
 import { parseDiarizedText } from "./core/parse-diarized.js";
 import { alignTurnsToSegments, buildTranscript, type PlainSegment } from "./core/assemble.js";
-import { calculateChunks, mergeChunkSegments, type MergeableSegment } from "./core/chunk.js";
+import { calculateChunks, chunkOwnership, mergeChunkSegments, type MergeableSegment } from "./core/chunk.js";
 import { toJSON, toMarkdown, toSRT } from "./core/format.js";
 import { Intermediates } from "./node/intermediates.js";
 import { identifySpeakersLLM } from "./core/identify.js";
@@ -148,6 +148,7 @@ export async function transcribe(
   const allTurns: LlmLine[] = [];
   const mergeable: MergeableSegment[] = [];
   const voiceDist: Record<string, Record<string, number>> = {};
+  const ownership = chunked ? chunkOwnership(timeChunks, info.durationSeconds) : null;
   let previousTail = "";
 
   for (const ch of timeChunks) {
@@ -207,7 +208,15 @@ export async function transcribe(
         : asr.words;
       const { segments: chunkSegs, voiceDist: vd } = alignTurnsToSegments(turns, windowWords, info.durationSeconds, subSegment);
       mergeVoiceDist(voiceDist, vd);
-      for (const s of chunkSegs) mergeable.push({ ...s, chunkIndex: ch.index });
+      // assign each segment to exactly one chunk by center-time ownership (no overlap dup)
+      const own = ownership?.[ch.index];
+      for (const s of chunkSegs) {
+        if (own) {
+          const center = (s.start + s.end) / 2;
+          if (center < own.start || center >= own.end) continue;
+        }
+        mergeable.push({ ...s, chunkIndex: ch.index });
+      }
     }
   }
 

@@ -2,7 +2,7 @@
 import { test, expect, describe } from "bun:test";
 import { secondsToSrtTime } from "../core/time.js";
 import { splitSpeakerPrefix, parseSrt } from "../core/srt.js";
-import { calculateChunks, mergeChunkSegments, type MergeableSegment } from "../core/chunk.js";
+import { calculateChunks, chunkOwnership, mergeChunkSegments, type MergeableSegment } from "../core/chunk.js";
 
 describe("secondsToSrtTime hardening (#8)", () => {
   test("non-finite input yields zero time, not NaN", () => {
@@ -41,6 +41,19 @@ describe("calculateChunks config clamp (#3)", () => {
       expect(chunks[i]!.startSeconds).toBeLessThanOrEqual(chunks[i - 1]!.endSeconds);
     }
     expect(chunks[chunks.length - 1]!.endSeconds).toBe(3600);
+  });
+});
+
+describe("chunkOwnership (overlap partitioning)", () => {
+  test("partitions the timeline contiguously at overlap midpoints", () => {
+    const chunks = calculateChunks(1913, 900, 120); // [0-900],[780-1680],[1560-1913]
+    const own = chunkOwnership(chunks, 1913);
+    expect(own[0]!.start).toBe(0);
+    expect(own[0]!.end).toBeCloseTo(840, 0); // midpoint(900, 780)
+    expect(own[1]!.end).toBeCloseTo(1620, 0); // midpoint(1680, 1560)
+    expect(own[own.length - 1]!.end).toBe(1913);
+    // contiguous: no gaps, no overlaps
+    for (let i = 1; i < own.length; i++) expect(own[i]!.start).toBe(own[i - 1]!.end);
   });
 });
 

@@ -75,16 +75,32 @@ Long files (>35 min) are automatically chunked with overlap and stitched back to
 
 ## Browser
 
-The fusion core is pure and dependency-free (`offmute-v2/browser`, ~32KB). The host handles media (ffmpeg.wasm) and provider calls (fetch), then fuses:
+Runs **entirely in the browser** (`offmute-v2/browser`, ~50KB, zero deps): decode with
+ffmpeg.wasm, call the providers over `fetch`, fuse with the pure core. You hand it a
+loaded `@ffmpeg/ffmpeg` instance and your keys — one call does the rest (chunking and
+all):
 
 ```ts
-import { parseDiarizedText, assembleTranscript, toSRT } from "offmute-v2/browser";
+import { FFmpeg } from "@ffmpeg/ffmpeg";
+import { transcribeInBrowser } from "offmute-v2/browser";
 
-const asr = await myAsr(audioBlob);                  // -> AsrResult (words + times)
-const turns = parseDiarizedText(await myLLM(audioBlob, prompt));
-const { transcript } = assembleTranscript({ turns, asr, durationSeconds: asr.durationSeconds });
-const srt = toSRT(transcript);
+const ffmpeg = new FFmpeg();
+await ffmpeg.load();
+
+const { srt, markdown, transcript } = await transcribeInBrowser(file /* File/Blob */, {
+  ffmpeg,
+  apiKeys: { gemini: GEMINI_KEY, assemblyai: ASSEMBLYAI_KEY }, // injected by the host
+  instructions: "Host is Alice; label callers as 'Caller'.",
+  useVideo: true,
+  onProgress: (e) => console.log(e.stage, e.message),
+});
 ```
+
+A runnable demo is in [`examples/browser/index.html`](examples/browser/index.html) (loads
+ffmpeg.wasm from a CDN). Lower-level pieces (`GeminiFetchClient`, `transcribeWithAssemblyAIFetch`,
+`extractAudioWasm`, and the pure `assembleTranscript`) are exported too — see
+[`docs/BROWSER.md`](docs/BROWSER.md). The fetch providers are isomorphic, so they work in
+Node 18+ as well.
 
 ## Requirements
 

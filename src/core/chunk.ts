@@ -35,6 +35,25 @@ export function calculateChunks(
   return chunks;
 }
 
+/**
+ * Partition the timeline so each chunk "owns" a contiguous, non-overlapping span:
+ * the boundary between adjacent chunks is the midpoint of their overlap. Assigning
+ * each output segment to the chunk that owns its center time means every piece of
+ * speech is emitted exactly once — no overlap duplication — without fuzzy dedup.
+ */
+export function chunkOwnership(
+  chunks: TimeChunk[],
+  totalDuration: number
+): Array<{ start: number; end: number }> {
+  return chunks.map((c, i) => {
+    const prev = chunks[i - 1];
+    const next = chunks[i + 1];
+    const start = i === 0 || !prev ? 0 : (prev.endSeconds + c.startSeconds) / 2;
+    const end = i === chunks.length - 1 || !next ? totalDuration : (c.endSeconds + next.startSeconds) / 2;
+    return { start, end };
+  });
+}
+
 export interface MergeableSegment {
   start: number;
   end: number;
