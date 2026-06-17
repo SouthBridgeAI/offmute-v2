@@ -4,6 +4,7 @@
  */
 import { GoogleGenAI } from "@google/genai";
 import { basename, extname } from "node:path";
+import { withRetry } from "../core/retry.js";
 
 const MIME_BY_EXT: Record<string, string> = {
   ".mp3": "audio/mp3",
@@ -30,38 +31,15 @@ export function mimeForPath(path: string): string {
   return m;
 }
 
-/** Is this a transient error worth retrying (overload, rate limit, 5xx, network)? */
-export function isRetryableError(err: unknown): boolean {
-  const e = err as { status?: number; code?: number; message?: string };
-  const code = e?.status ?? e?.code;
-  if (typeof code === "number" && [408, 429, 500, 502, 503, 504].includes(code)) return true;
-  const msg = (e?.message ?? String(err)).toLowerCase();
-  return /unavailable|overloaded|rate.?limit|deadline|timeout|temporar|try again|resource.?exhausted|\b(429|500|502|503|504)\b|internal error|econnreset|etimedout|socket hang|fetch failed|network/.test(
-    msg
-  );
-}
-
-/** Retry an async op with exponential backoff + jitter on transient errors. */
-export async function withRetry<T>(
-  fn: () => Promise<T>,
-  opts: { retries?: number; baseDelayMs?: number; label?: string } = {}
-): Promise<T> {
-  const retries = opts.retries ?? 4;
-  const base = opts.baseDelayMs ?? 1000;
-  let lastErr: unknown;
-  for (let attempt = 0; attempt <= retries; attempt++) {
-    try {
-      return await fn();
-    } catch (err) {
-      lastErr = err;
-      if (attempt === retries || !isRetryableError(err)) throw err;
-      const delay = Math.min(30000, base * 2 ** attempt) + Math.floor(Math.random() * 250);
-      const m = (err as Error)?.message?.slice(0, 90) ?? String(err);
-      process.stderr.write(`\n  [retry${opts.label ? ` ${opts.label}` : ""} ${attempt + 1}/${retries} in ${delay}ms] ${m}`);
-      await new Promise((r) => setTimeout(r, delay));
-    }
-  }
-  throw lastErr;
+/** Retry wrapper that logs attempts to stderr (Node). */
+function retry<T>(fn: () => Promise<T>, label: string, retries?: number): Promise<T> {
+  return withRetry(fn, {
+    retries,
+    onRetry: ({ attempt, retries: n, delayMs, error }) =>
+      process.stderr.write(
+        `\n  [retry ${label} ${attempt}/${n} in ${delayMs}ms] ${(error as Error)?.message?.slice(0, 90) ?? String(error)}`
+      ),
+  });
 }
 
 export interface UploadedFile {
@@ -114,9 +92,9 @@ export class GeminiClient {
   /** Upload a local file via the Files API and wait until it's ACTIVE. */
   async uploadFile(filePath: string, mimeType?: string): Promise<UploadedFile> {
     const mt = mimeType ?? mimeForPath(filePath);
-    const uploaded = await withRetry(
+    const uploaded = await retry(
       () => this.ai.files.upload({ file: filePath, config: { mimeType: mt, displayName: basename(filePath) } }),
-      { label: `upload ${basename(filePath)}` }
+      `upload ${basename(filePath)}`
     );
     let file = uploaded;
     // poll until processed
@@ -172,14 +150,15 @@ export class GeminiClient {
     }
 
     try {
-      const resp = await withRetry(
+      const resp = await retry(
         () =>
           this.ai.models.generateContent({
             model,
             contents: [{ role: "user", parts: builtParts as never }],
             config,
           }),
-        { retries: options.retries ?? 4, label: `generate ${model}` }
+        `generate ${model}`,
+        options.retries ?? 4
       );
       const usage = (resp as { usageMetadata?: { promptTokenCount?: number; candidatesTokenCount?: number; thoughtsTokenCount?: number } }).usageMetadata;
       return {

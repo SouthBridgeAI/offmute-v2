@@ -23,10 +23,16 @@ export * from "./core/parse-diarized.js";
 export * from "./core/prompts.js";
 export * from "./core/chunk.js";
 export * from "./core/eval.js";
+export * from "./core/retry.js";
 export {
   identifySpeakersLLM,
   parseIdentifyJson,
   type TextGenerator,
   type IdentifyResult,
 } from "./core/identify.js";
-export { assembleTranscript, type AssembleOptions } from "./core/assemble.js";
+export * from "./core/assemble.js";
+// Isomorphic providers (fetch-based — run in the browser and Node 18+)
+export * from "./providers/gemini-fetch.js";
+export * from "./providers/assemblyai-fetch.js";
+// Browser orchestrator (ffmpeg.wasm + fetch providers + fusion core)
+export * from "./browser-pipeline.js";

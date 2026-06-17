@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>offmute-v2 — in-browser demo</title>
+    <style>
+      body { font: 15px/1.5 system-ui, sans-serif; max-width: 820px; margin: 2rem auto; padding: 0 1rem; color: #111; }
+      h1 { font-size: 1.4rem; }
+      label { display: block; margin: 0.6rem 0 0.2rem; font-weight: 600; }
+      input[type="text"], input[type="password"] { width: 100%; padding: 0.4rem; box-sizing: border-box; }
+      button { margin-top: 1rem; padding: 0.6rem 1.2rem; font-weight: 600; cursor: pointer; }
+      #log { white-space: pre-wrap; background: #f6f6f6; padding: 0.8rem; border-radius: 6px; min-height: 2rem; margin-top: 1rem; }
+      #out { white-space: pre-wrap; background: #fafafa; border: 1px solid #ddd; padding: 0.8rem; border-radius: 6px; margin-top: 1rem; font: 13px/1.45 ui-monospace, monospace; max-height: 50vh; overflow: auto; }
+      .row { display: flex; gap: 1rem; }
+      .row > div { flex: 1; }
+      small { color: #666; }
+    </style>
+  </head>
+  <body>
+    <h1>offmute-v2 — entirely in the browser 🎙️⏱️</h1>
+    <p>
+      Decodes media with <code>ffmpeg.wasm</code>, calls AssemblyAI + Gemini over <code>fetch</code>, and fuses them
+      with the pure offmute-v2 core. Keys stay in your browser. <small>(Build the bundle first: <code>npm run build</code>.)</small>
+    </p>
+
+    <div class="row">
+      <div>
+        <label for="gemini">Gemini API key</label>
+        <input id="gemini" type="password" placeholder="GEMINI_API_KEY" />
+      </div>
+      <div>
+        <label for="assembly">AssemblyAI API key</label>
+        <input id="assembly" type="password" placeholder="ASSEMBLYAI_API_KEY" />
+      </div>
+    </div>
+
+    <label for="instructions">Instructions (optional)</label>
+    <input id="instructions" type="text" placeholder="e.g. Host is Alice; label callers as 'Caller'." />
+
+    <label for="file">Audio / video file</label>
+    <input id="file" type="file" accept="audio/*,video/*" />
+    <label><input id="useVideo" type="checkbox" /> use video keyframes (slower; for visual context)</label>
+
+    <button id="go">Transcribe</button>
+
+    <div id="log"></div>
+    <div id="out"></div>
+
+    <script type="module">
+      // ffmpeg.wasm (single-thread core — no COOP/COEP headers required)
+      import { FFmpeg } from "https://esm.sh/@ffmpeg/ffmpeg@0.12.10";
+      import { toBlobURL } from "https://esm.sh/@ffmpeg/util@0.12.1";
+      // the offmute-v2 browser bundle (built to ../../dist/browser.js)
+      import { transcribeInBrowser } from "../../dist/browser.js";
+
+      const log = (m) => (document.getElementById("log").textContent += m + "\n");
+      const $ = (id) => document.getElementById(id);
+
+      let ffmpeg;
+      async function getFFmpeg() {
+        if (ffmpeg) return ffmpeg;
+        log("Loading ffmpeg.wasm…");
+        ffmpeg = new FFmpeg();
+        const base = "https://esm.sh/@ffmpeg/core@0.12.10/dist/esm";
+        await ffmpeg.load({
+          coreURL: await toBlobURL(`${base}/ffmpeg-core.js`, "text/javascript"),
+          wasmURL: await toBlobURL(`${base}/ffmpeg-core.wasm`, "application/wasm"),
+        });
+        return ffmpeg;
+      }
+
+      $("go").onclick = async () => {
+        const file = $("file").files[0];
+        if (!file) return alert("Pick a file");
+        document.getElementById("log").textContent = "";
+        document.getElementById("out").textContent = "";
+        try {
+          const ff = await getFFmpeg();
+          const res = await transcribeInBrowser(file, {
+            ffmpeg: ff,
+            apiKeys: { gemini: $("gemini").value.trim(), assemblyai: $("assembly").value.trim() },
+            instructions: $("instructions").value.trim() || undefined,
+            useVideo: $("useVideo").checked,
+            onProgress: (e) => log(`[${e.stage}] ${e.message}`),
+          });
+          log(`\nSpeakers: ${res.transcript.speakers.map((s) => s.label).join(", ")}`);
+          document.getElementById("out").textContent = res.srt;
+        } catch (err) {
+          log("ERROR: " + (err?.message ?? err));
+        }
+      };
+    </script>
+  </body>
+</html>
