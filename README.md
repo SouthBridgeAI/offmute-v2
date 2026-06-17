@@ -39,6 +39,8 @@ preprocess → describe → llm-transcribe (per chunk) → timestamped (whole fi
                                                               ↓
                             align (edit-distance: LLM text ↔ ASR word times)
                                                               ↓
+                            gap-fill (recover dropped content from ASR)
+                                                              ↓
                             consistency (merge ASR over-splits via LLM labels)
                                                               ↓
                             identify (optional, DeepSeek: name speakers from content)
@@ -50,6 +52,14 @@ preprocess → describe → llm-transcribe (per chunk) → timestamped (whole fi
 token stream against the ASR word stream in one edit-distance DP pass, then split back
 into segments — long ordered sequences pin common words unambiguously and transfer
 accurate word timestamps onto the richer LLM text.
+
+**Gap-fill** recovers content the LLM dropped: where ASR has speech in a time gap not
+covered by any LLM segment (e.g. a dropped opening word), an ASR fallback segment is
+inserted — so nothing the ASR heard is lost.
+
+**Timestamped providers**: AssemblyAI Universal-2 (default — diarization + word
+timestamps) or Groq Whisper (`--timestamped whisper-groq` — free/fast word timestamps,
+no diarization; consistency then groups by LLM label).
 
 ## Diarization levels (selectable via `--level`)
 
@@ -73,9 +83,9 @@ npx offmute-v2 meeting.mov --passes align,consistency,finalize   # resume from i
 npx offmute-v2 meeting.mov --only-chunk 2           # debug one chunk
 ```
 
-Key options: `--passes`, `--level <1|2|3>`, `--model`, `--formats srt,md,json`,
-`--chunk-seconds`, `--overlap-seconds`, `--concurrency`, `--instructions`, `--force`,
-`--only-chunk`, `--reasoner`.
+Key options: `--passes`, `--level <1|2|3>`, `--model`, `--timestamped assemblyai|whisper-groq`,
+`--formats srt,md,json`, `--chunk-seconds`, `--overlap-seconds`, `--concurrency`,
+`--instructions`, `--force`, `--only-chunk`, `--reasoner`.
 
 ### Node library
 ```ts
@@ -135,7 +145,7 @@ npm run build  # tsup → dist/ (node + browser bundles)
 
 ## Requirements
 - Node ≥ 20, ffmpeg/ffprobe in PATH.
-- API keys: `GEMINI_API_KEY` (or `GOOGLE_API_KEY`), `ASSEMBLYAI_API_KEY`. `DEEPSEEK_API_KEY` optional (level 3).
+- API keys: `GEMINI_API_KEY` (or `GOOGLE_API_KEY`), `ASSEMBLYAI_API_KEY`. `DEEPSEEK_API_KEY` optional (level 3). `GROQ_API_KEY` optional (whisper-groq fallback).
 
 ## Eval
 ```bash
