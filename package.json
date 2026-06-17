@@ -1,0 +1,57 @@
+{
+  "name": "offmute-v2",
+  "version": "0.0.1",
+  "description": "Timestamp-correct, diarized meeting transcription combining multimodal LLMs with ASR timing.",
+  "type": "module",
+  "bin": {
+    "offmute-v2": "./dist/cli.js"
+  },
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./browser": {
+      "types": "./dist/browser.d.ts",
+      "import": "./dist/browser.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src --ext .ts",
+    "dev": "bun run src/cli.ts",
+    "test": "bun test"
+  },
+  "keywords": [
+    "transcription",
+    "diarization",
+    "subtitles",
+    "srt",
+    "gemini",
+    "assemblyai",
+    "meeting",
+    "asr"
+  ],
+  "author": "Southbridge",
+  "license": "Apache-2.0",
+  "dependencies": {
+    "@google/genai": "^1.0.0",
+    "assemblyai": "^4.0.0",
+    "commander": "^12.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "tsup": "^8.0.0",
+    "typescript": "^5.4.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

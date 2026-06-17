@@ -1,0 +1,35 @@
+# Dependencies
+node_modules/
+.pnp.*
+
+# Build output
+dist/
+*.tsbuildinfo
+
+# Env / secrets
+.env
+.env.*
+!.env.example
+
+# Runtime intermediates & caches (per-run LLM/ASR outputs, chunks)
+.offmute_cache/
+runs/
+*.local/
+
+# Media — never commit large test media
+*.mov
+*.mp4
+*.mkv
+*.webm
+*.wav
+*.mp3
+*.m4a
+*.opus
+*.flac
+# (keep small reference SRTs/JSON if needed; they're tiny)
+
+# OS / editor
+.DS_Store
+*.log
+.idea/
+.vscode/
