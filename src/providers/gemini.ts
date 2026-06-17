@@ -54,8 +54,10 @@ export interface GeminiOptions {
   schema?: unknown;
   /** system instruction */
   systemInstruction?: string;
-  /** thinking budget (tokens). 0 disables thinking on models that support it. */
+  /** thinking budget in tokens (Gemini 2.5 family). Ignored by Gemini 3.x. */
   thinkingBudget?: number;
+  /** thinking level (Gemini 3.x family): "MINIMAL" | "LOW" | "MEDIUM" | "HIGH". */
+  thinkingLevel?: "MINIMAL" | "LOW" | "MEDIUM" | "HIGH";
 }
 
 export interface GeminiResult {
@@ -123,7 +125,10 @@ export class GeminiClient {
       config["responseMimeType"] = "application/json";
       config["responseSchema"] = options.schema;
     }
-    if (options.thinkingBudget !== undefined) {
+    // Gemini 3.x honors thinkingLevel; 2.5 honors thinkingBudget. Prefer level if given.
+    if (options.thinkingLevel) {
+      config["thinkingConfig"] = { thinkingLevel: options.thinkingLevel };
+    } else if (options.thinkingBudget !== undefined) {
       config["thinkingConfig"] = { thinkingBudget: options.thinkingBudget };
     }
 

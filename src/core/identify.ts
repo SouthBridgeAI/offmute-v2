@@ -9,7 +9,14 @@ import type { LlmLine } from "../types.js";
 export interface TextGenerator {
   generate(
     parts: Array<{ text?: string; filePath?: string }>,
-    options: { model?: string; temperature?: number; maxOutputTokens?: number; systemInstruction?: string; thinkingBudget?: number }
+    options: {
+      model?: string;
+      temperature?: number;
+      maxOutputTokens?: number;
+      systemInstruction?: string;
+      thinkingBudget?: number;
+      thinkingLevel?: "MINIMAL" | "LOW" | "MEDIUM" | "HIGH";
+    }
   ): Promise<{ text: string }>;
 }
 
@@ -113,8 +120,8 @@ export async function identifySpeakersLLM(
   const res = await gen.generate([{ text: prompt }], {
     model: options.llmModel ?? "gemini-flash-latest",
     temperature: 0,
-    maxOutputTokens: 8192,
-    thinkingBudget: 2048,
+    maxOutputTokens: 16384,
+    thinkingLevel: "MINIMAL",
   });
   const parsed = parseIdentifyJson(res.text);
   const aliases: Record<string, string> = {};

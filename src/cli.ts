@@ -18,7 +18,7 @@ program
   .option("--keyframes <n>", "number of keyframes for video context", "8")
   .option("--no-sub-segment", "keep whole speaker turns (don't split into display cues)")
   .option("--no-identify", "skip the speaker-identification/merge pass")
-  .option("--thinking-budget <n>", "LLM thinking token budget", "4096")
+  .option("--thinking-level <level>", "LLM thinking level: MINIMAL|LOW|MEDIUM|HIGH", "MINIMAL")
   .option("-o, --out <dir>", "output directory for transcript files", ".")
   .option("--intermediates-dir <dir>", "directory for intermediate artifacts")
   .option("--no-cache", "ignore cached intermediates")
@@ -43,7 +43,7 @@ program
         keyframeCount: parseInt(opts.keyframes, 10),
         subSegment: opts.subSegment,
         identifySpeakers: opts.identify,
-        llmThinkingBudget: parseInt(opts.thinkingBudget, 10),
+        llmThinkingLevel: opts.thinkingLevel,
         intermediatesDir: opts.intermediatesDir,
         cache: opts.cache,
         onProgress,

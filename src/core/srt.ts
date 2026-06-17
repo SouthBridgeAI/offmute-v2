@@ -31,7 +31,7 @@ export function splitSpeakerPrefix(text: string): {
   // reject if prefix contains sentence-ending punctuation or is too "wordy"
   if (/[.!?]/.test(prefix)) return { body: text };
   const wordCount = prefix.split(/\s+/).length;
-  if (wordCount > 5) return { body: text };
+  if (wordCount > 4) return { body: text };
   return { speaker: prefix, body: rest };
 }
 
