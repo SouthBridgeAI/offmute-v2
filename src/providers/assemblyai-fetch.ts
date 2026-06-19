@@ -41,19 +41,27 @@ export class AssemblyAIFetchClient {
       body: JSON.stringify(params),
     });
     if (!cr.ok) throw new Error(`AssemblyAI create ${cr.status}: ${await cr.text()}`);
-    const transcript = (await cr.json()) as any;
+    interface AaiT {
+      id: string;
+      status: string;
+      error?: string;
+      duration?: number;
+      utterances?: { speaker: string; text: string; start?: number; end?: number; confidence?: number; words?: { text: string; start?: number; end?: number; confidence?: number }[] }[];
+      words?: { text: string; start?: number; end?: number; confidence?: number }[];
+    }
+    const transcript = (await cr.json()) as AaiT;
 
     // 3. Poll.
-    let t = transcript;
+    let t: AaiT = transcript;
     while (t.status !== "completed" && t.status !== "error") {
       await new Promise((r) => setTimeout(r, 2000));
       const pr = await fetch(`${BASE}/transcript/${t.id}`, { headers: { authorization: this.apiKey } });
-      t = await pr.json();
+      t = (await pr.json()) as AaiT;
     }
     if (t.status === "error") throw new Error(`AssemblyAI error: ${t.error}`);
 
     // 4. Map.
-    const toWord = (w: any): TimestampedWord => ({
+    const toWord = (w: { text: string; start?: number; end?: number; confidence?: number }): TimestampedWord => ({
       text: w.text,
       start: (w.start || 0) / 1000,
       end: (w.end || 0) / 1000,

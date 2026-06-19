@@ -70,7 +70,7 @@ export async function identifySpeakers(
   const { data, error } = await client.chatJson<{ speakers: IdentifiedSpeaker[]; reasoning: string }>(
     model,
     [{ role: "user", content: identifyPrompt(excerpt, roster, knownSpeakers) }],
-    { temperature: 0.1, maxTokens: 2000 },
+    { temperature: 0.1, maxTokens: 2000, logKind: "identify" },
   );
   if (error || !data) {
     return { nameMap: {}, speakers: [], reasoning: error || "no response" };

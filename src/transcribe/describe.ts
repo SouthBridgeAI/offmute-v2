@@ -42,6 +42,7 @@ export async function describeMeeting(
   const res = await client.generate(model, descriptionPrompt(fileName, instructions), files, {
     temperature: 0.2,
     maxRetries: 3,
+    logKind: "describe",
   });
   const text = res.text || "";
   // Split into DESCRIPTION / ROSTER by the "---" separator.

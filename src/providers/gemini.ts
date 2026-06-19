@@ -5,9 +5,10 @@
  * Uses `@google/genai` v1 SDK. Audio is uploaded via the Files API (supports large
  * files) and referenced by URI in the generate request.
  */
-import { GoogleGenAI, type File, } from "@google/genai";
+import { GoogleGenAI, type File, type Part } from "@google/genai";
 import { basename } from "node:path";
 import { logger } from "../utils/logger.js";
+import { logLlmCall } from "./llm-log.js";
 
 export interface GeminiFileInput {
   path: string;
@@ -29,6 +30,10 @@ export interface GeminiGenerateOptions {
   responseSchema?: Record<string, unknown>;
   /** System instruction. */
   systemInstruction?: string;
+  /** What this call is for (logged): describe | transcribe | identify | … */
+  logKind?: string;
+  /** Chunk index (logged, for transcription calls). */
+  logChunk?: number;
 }
 
 export interface GeminiResult {
@@ -75,12 +80,12 @@ export class GeminiClient {
     let file = await this.ai.files.upload({ file: path, config: { mimeType: mt } });
     // Poll until ACTIVE (Gemini must process audio/video before generation).
     let tries = 0;
-    while ((file as any).state === "PROCESSING" && tries < 120) {
+    while (file.state === "PROCESSING" && tries < 120) {
       await sleep(2000);
       file = await this.ai.files.get({ name: file.name! });
       tries++;
     }
-    if ((file as any).state === "FAILED") {
+    if (file.state === "FAILED") {
       throw new Error(`Gemini file processing failed: ${path}`);
     }
     logger.debug(`[gemini] uploaded ${basename(path)} → ${file.uri}`);
@@ -120,13 +125,14 @@ export class GeminiClient {
       }
       if (systemInstruction) config.systemInstruction = systemInstruction;
 
-      const parts: any[] = uploaded.map((f) => ({
+      const parts: Part[] = uploaded.map((f) => ({
         fileData: { fileUri: f.uri, mimeType: f.mimeType },
       }));
       parts.push({ text: prompt });
 
       let lastError: string | undefined;
       for (let attempt = 0; attempt < maxRetries; attempt++) {
+        const t0 = Date.now();
         try {
           const response = await this.ai.models.generateContent({
             model,
@@ -134,17 +140,43 @@ export class GeminiClient {
             config,
           });
           const usage = response.usageMetadata || {};
-          return {
-            text: response.text ?? "",
+          const text = response.text ?? "";
+          const result = {
+            text,
             usage: {
               inputTokens: usage.promptTokenCount ?? 0,
               outputTokens: usage.candidatesTokenCount ?? 0,
               totalTokens: usage.totalTokenCount ?? 0,
             },
           };
+          logLlmCall({
+            ts: new Date(t0).toISOString(),
+            provider: "gemini",
+            model,
+            kind: opts.logKind,
+            chunk: opts.logChunk,
+            prompt,
+            response: text,
+            usage: result.usage,
+            durationMs: Date.now() - t0,
+            attempt: attempt + 1,
+          });
+          return result;
         } catch (err) {
           lastError = err instanceof Error ? err.message : String(err);
           logger.warn(`[gemini] attempt ${attempt + 1}/${maxRetries} failed: ${lastError}`);
+          logLlmCall({
+            ts: new Date(t0).toISOString(),
+            provider: "gemini",
+            model,
+            kind: opts.logKind,
+            chunk: opts.logChunk,
+            prompt,
+            response: "",
+            durationMs: Date.now() - t0,
+            attempt: attempt + 1,
+            error: lastError,
+          });
           if (attempt < maxRetries - 1) await sleep(retryDelayMs * (attempt + 1));
         }
       }

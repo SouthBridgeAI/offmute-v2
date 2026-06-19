@@ -6,7 +6,7 @@
  */
 import type { ChunkPlan } from "./types.js";
 import { createHash } from "node:crypto";
-import { basename, resolve } from "node:path";
+import { basename, dirname, resolve } from "node:path";
 import { statSync } from "node:fs";
 
 /** All supported provider keys. */
@@ -72,6 +72,8 @@ export interface PipelineOptions {
   onlyChunk?: number;
   /** Show progress. */
   showProgress?: boolean;
+  /** Log every LLM call (prompt+response+usage+timing) to <intermediates>/llm-calls.jsonl. */
+  llmLog?: boolean;
   /** Log level. */
   logLevel?: "debug" | "info" | "warn" | "error";
 }
@@ -106,6 +108,10 @@ export const MODELS = {
   gpt4o: "gpt-4o",
   claudeSonnet: "claude-sonnet-4-5",
 } as const;
+
+/** Default model for each role (used when --model/--reasoner not passed). */
+export const DEFAULT_TRANSCRIBE_MODEL = MODELS.gemini25Flash;
+export const DEFAULT_REASONER_MODEL = MODELS.deepseek;
 
 /** Resolve API keys: injected > env. */
 export function resolveKeys(injected?: ApiKeys): ApiKeys {
@@ -177,20 +183,22 @@ export function resolveOptions(opts: PipelineOptions): Required<
     force: opts.force ?? false,
     onlyChunk: opts.onlyChunk,
     showProgress: opts.showProgress ?? true,
+    llmLog: opts.llmLog ?? true,
     logLevel: opts.logLevel ?? "info",
   };
 }
 
 /**
  * Derive a per-input intermediates directory so different input files never share a
- * cache (the default-`./intermediates` collision bug). Keyed by the input's absolute
- * path hash + basename, e.g. `./intermediates/vmeeting-a1b2c3d4`.
+ * cache. Anchored to the INPUT FILE's directory (not the current working directory),
+ * so the location is stable regardless of where the tool is run from — e.g.
+ * `/path/to/.offmute-v2-vmeeting-a1b2c3d4`. Pass `-i` to override.
  */
 export function deriveIntermediatesDir(input: string): string {
   const abs = resolve(input);
   const hash = createHash("sha1").update(abs).digest("hex").slice(0, 8);
   const base = basename(input, extOf(input)) || "input";
-  return `./intermediates/${base}-${hash}`;
+  return `${dirname(abs)}/.offmute-v2-${base}-${hash}`;
 }
 
 function extOf(p: string): string {

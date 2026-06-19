@@ -105,8 +105,12 @@ export class GeminiFetchClient {
           const txt = await res.text();
           throw new Error(`HTTP ${res.status}: ${txt.slice(0, 300)}`);
         }
-        const data = (await res.json()) as any;
-        const text = data.candidates?.[0]?.content?.parts?.map((p: any) => p.text || "").join("") ?? "";
+        const data = (await res.json()) as {
+          candidates?: { content?: { parts?: { text?: string }[] } }[];
+          usageMetadata?: { promptTokenCount?: number; candidatesTokenCount?: number; totalTokenCount?: number };
+        };
+        const text =
+          data.candidates?.[0]?.content?.parts?.map((p) => p.text || "").join("") ?? "";
         const u = data.usageMetadata || {};
         return {
           text,

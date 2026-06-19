@@ -45,6 +45,7 @@ program
   .option("--only-chunk <n>", "process only a specific chunk index (debug)")
   .option("--save-intermediates", "save intermediates (default true)", true)
   .option("--no-progress", "hide progress output")
+  .option("--no-llm-log", "disable per-call LLM logging to <intermediates>/llm-calls.jsonl")
   .option("--log-level <level>", "debug | info | warn | error", "info");
 
 program.parse();
@@ -78,6 +79,7 @@ transcribe({
   onlyChunk: opts.onlyChunk ? parseInt(opts.onlyChunk, 10) : undefined,
   saveIntermediates: opts.saveIntermediates,
   showProgress: opts.progress,
+  llmLog: opts.llmLog,
   logLevel: opts.logLevel,
 })
   .then((result) => {

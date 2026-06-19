@@ -104,7 +104,12 @@ export async function transcribeChunk(
       prompt,
       [{ path: chunkPath }],
       TRANSCRIPT_SCHEMA as Record<string, unknown>,
-      { temperature: opts.temperature ?? 0.2, maxRetries: 3 },
+      {
+        temperature: opts.temperature ?? 0.2,
+        maxRetries: 3,
+        logKind: "transcribe",
+        logChunk: ctx.index - 1,
+      },
     );
 
     if (gen.error || !gen.data) {

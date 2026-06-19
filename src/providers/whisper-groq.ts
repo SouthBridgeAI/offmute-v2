@@ -43,16 +43,20 @@ export class WhisperGroqClient {
       const txt = await res.text();
       throw new Error(`Groq Whisper ${res.status}: ${txt.slice(0, 300)}`);
     }
-    const data = (await res.json()) as any;
+    const data = (await res.json()) as {
+      duration?: number;
+      words?: { word?: string; start: number; end: number }[];
+      segments?: { text?: string; start: number; end: number }[];
+    };
 
-    const words: TimestampedWord[] = (data.words || []).map((w: any) => ({
+    const words: TimestampedWord[] = (data.words || []).map((w) => ({
       text: String(w.word || ""),
       start: w.start,
       end: w.end,
       confidence: undefined,
     }));
     // Whisper segments → utterances with NO speaker (diarization comes from the LLM).
-    const utterances: TimestampedUtterance[] = (data.segments || []).map((s: any) => ({
+    const utterances: TimestampedUtterance[] = (data.segments || []).map((s) => ({
       speaker: "speaker_A",
       text: String(s.text || "").trim(),
       start: s.start,

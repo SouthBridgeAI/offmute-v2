@@ -9,7 +9,7 @@ async function main() {
   const out: string[] = [];
   const pager = await ai.models.list();
   for await (const m of pager) {
-    const mod = (m as any).supportedGenerationMethods || [];
+    const mod = (m as { supportedGenerationMethods?: string[] }).supportedGenerationMethods || [];
     out.push(
       `${m.name?.padEnd(34)} | ${m.displayName} | ${Array.isArray(mod) ? mod.join(",") : ""}`,
     );

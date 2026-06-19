@@ -12,6 +12,8 @@ import {
   planChunks,
   inputSignature,
   DEFAULT_PASSES,
+  DEFAULT_TRANSCRIBE_MODEL,
+  DEFAULT_REASONER_MODEL,
   type PipelineOptions,
   type Pass,
   type ApiKeys,
@@ -31,6 +33,7 @@ import {
 import { GeminiClient } from "../providers/gemini.js";
 import { AssemblyAIProvider } from "../providers/assemblyai.js";
 import { WhisperGroqClient } from "../providers/whisper-groq.js";
+import { setLlmLogPath } from "../providers/llm-log.js";
 import { describeMeeting, type MeetingDescription } from "../transcribe/describe.js";
 import { transcribeChunk, type ParsedLlmSegment, type ChunkTranscriptionResult } from "../transcribe/llm-transcribe.js";
 import { alignSegments, type AlignedSegment } from "../align/aligner.js";
@@ -88,6 +91,8 @@ export async function transcribe(opts: PipelineOptions): Promise<TranscriptResul
   }
   mkdirSync(options.intermediatesDir, { recursive: true });
   mkdirSync(options.outputDir, { recursive: true });
+  // Log every LLM call (prompt + response + usage + timing) for validation.
+  setLlmLogPath(options.llmLog ? `${options.intermediatesDir}/llm-calls.jsonl` : null);
 
   // Input-identity manifest: if the file at this path changed (different size/mtime, or
   // a different file now occupies the path), invalidate ALL caches automatically. This
@@ -106,8 +111,8 @@ export async function transcribe(opts: PipelineOptions): Promise<TranscriptResul
 
   const passes = options.passes;
   const models = {
-    transcribe: options.model ?? "gemini-2.5-flash",
-    reasoner: options.reasoner ?? "deepseek-chat",
+    transcribe: options.model ?? DEFAULT_TRANSCRIBE_MODEL,
+    reasoner: options.reasoner ?? DEFAULT_REASONER_MODEL,
   };
 
   if (!(await checkFfmpeg())) throw new Error("ffmpeg/ffprobe not found in PATH");

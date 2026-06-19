@@ -4,6 +4,7 @@
  * Used for text-reasoning passes (speaker identification, refinement) where native
  * audio isn't needed — DeepSeek is cheap and strong for this.
  */
+import { logLlmCall } from "./llm-log.js";
 
 export interface ChatMessage {
   role: "system" | "user" | "assistant";
@@ -21,6 +22,8 @@ export interface ChatOptions {
   maxTokens?: number;
   responseJson?: boolean;
   maxRetries?: number;
+  /** What this call is for (logged): identify | … */
+  logKind?: string;
 }
 
 const PROVIDER_BASE: Record<string, string> = {
@@ -34,11 +37,12 @@ export class OpenAICompatClient {
     private baseUrl: string,
     private apiKey: string,
     private defaultModel: string,
+    private providerName = "openai-compat",
   ) {}
 
   static fromProvider(provider: string, apiKey: string, defaultModel: string): OpenAICompatClient {
     const base = PROVIDER_BASE[provider] ?? provider;
-    return new OpenAICompatClient(base, apiKey, defaultModel);
+    return new OpenAICompatClient(base, apiKey, defaultModel, provider);
   }
 
   async chat(model: string | undefined, messages: ChatMessage[], opts: ChatOptions = {}): Promise<ChatResult> {
@@ -55,7 +59,9 @@ export class OpenAICompatClient {
     }
 
     let lastError: string | undefined;
+    const promptStr = messages.map((m) => `${m.role}: ${m.content}`).join("\n");
     for (let attempt = 0; attempt < maxRetries; attempt++) {
+      const t0 = Date.now();
       try {
         const res = await fetch(`${this.baseUrl}/chat/completions`, {
           method: "POST",
@@ -69,17 +75,40 @@ export class OpenAICompatClient {
           const txt = await res.text();
           throw new Error(`HTTP ${res.status}: ${txt.slice(0, 300)}`);
         }
-        const data = (await res.json()) as any;
-        const text = data.choices?.[0]?.message?.content ?? "";
-        return {
-          text,
-          usage: {
-            inputTokens: data.usage?.prompt_tokens ?? 0,
-            outputTokens: data.usage?.completion_tokens ?? 0,
-          },
+        const data = (await res.json()) as {
+          choices?: { message?: { content?: string } }[];
+          usage?: { prompt_tokens?: number; completion_tokens?: number };
         };
+        const text = data.choices?.[0]?.message?.content ?? "";
+        const usage = {
+          inputTokens: data.usage?.prompt_tokens ?? 0,
+          outputTokens: data.usage?.completion_tokens ?? 0,
+        };
+        logLlmCall({
+          ts: new Date(t0).toISOString(),
+          provider: this.providerName,
+          model: m,
+          kind: opts.logKind,
+          prompt: promptStr,
+          response: text,
+          usage,
+          durationMs: Date.now() - t0,
+          attempt: attempt + 1,
+        });
+        return { text, usage };
       } catch (err) {
         lastError = err instanceof Error ? err.message : String(err);
+        logLlmCall({
+          ts: new Date(t0).toISOString(),
+          provider: this.providerName,
+          model: m,
+          kind: opts.logKind,
+          prompt: promptStr,
+          response: "",
+          durationMs: Date.now() - t0,
+          attempt: attempt + 1,
+          error: lastError,
+        });
         if (attempt < maxRetries - 1) await new Promise((r) => setTimeout(r, 1500 * (attempt + 1)));
       }
     }

@@ -65,8 +65,18 @@ export async function probe(input: string): Promise<ProbeResult> {
     "json",
     input,
   ]);
-  const data = JSON.parse(stdout);
-  const streams: any[] = data.streams || [];
+  const data = JSON.parse(stdout) as {
+    format?: { duration?: string; size?: string };
+    streams?: {
+      codec_type?: string;
+      codec_name?: string;
+      sample_rate?: string;
+      channels?: number;
+      width?: number;
+      height?: number;
+    }[];
+  };
+  const streams = data.streams || [];
   const audio = streams.find((s) => s.codec_type === "audio");
   const video = streams.find((s) => s.codec_type === "video");
   return {
@@ -75,7 +85,7 @@ export async function probe(input: string): Promise<ProbeResult> {
     hasVideo: !!video,
     audioCodec: audio?.codec_name,
     videoCodec: video?.codec_name,
-    sampleRate: audio ? parseInt(audio.sample_rate, 10) : undefined,
+    sampleRate: audio ? parseInt(audio.sample_rate ?? "0", 10) : undefined,
     channels: audio?.channels,
     width: video?.width,
     height: video?.height,

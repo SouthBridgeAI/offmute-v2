@@ -3,13 +3,21 @@
  * whole file (no chunking). Universal-2 speech model. Content-hash caching so dev
  * iteration doesn't re-pay upload/transcribe.
  */
-import { AssemblyAI } from "assemblyai";
+import { AssemblyAI, type TranscribeParams, type SpeechModel } from "assemblyai";
 import { createHash } from "node:crypto";
 import { readFile, mkdir, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { dirname } from "node:path";
 import type { TimestampedUtterance, TimestampedWord } from "../core/types.js";
 import { logger } from "../utils/logger.js";
+
+/** A word/utterance token from the AssemblyAI transcript response. */
+interface AaiWord {
+  text: string;
+  start?: number | null;
+  end?: number | null;
+  confidence?: number | null;
+}
 
 export interface AssemblyAIOptions {
   apiKey: string;
@@ -46,11 +54,11 @@ export class AssemblyAIProvider {
   constructor(opts: AssemblyAIOptions) {
     this.client = new AssemblyAI({ apiKey: opts.apiKey });
     this.cacheDir = opts.cacheDir;
-    this.speechModel = opts.speechModel ?? "universal";
+    this.speechModel = (opts.speechModel as SpeechModel) ?? "universal";
     this.speakersExpected = opts.speakersExpected;
   }
 
-  private speechModel: string;
+  private speechModel: SpeechModel;
   private speakersExpected?: number;
 
   /** Transcribe a local audio file. Returns cached result if available. */
@@ -66,14 +74,14 @@ export class AssemblyAIProvider {
     logger.info(`[assemblyai] uploading ${filePath}...`);
     const uploadUrl = await this.client.files.upload(filePath);
     logger.info(`[assemblyai] transcribing (speech_model=${this.speechModel})...`);
-    const params: Record<string, unknown> = {
+    const params: TranscribeParams = {
       audio: uploadUrl,
       speaker_labels: true,
       speech_model: this.speechModel,
     };
     if (this.speakersExpected) params.speakers_expected = this.speakersExpected;
 
-    const transcript = await this.client.transcripts.transcribe(params as any);
+    const transcript = await this.client.transcripts.transcribe(params);
     if (transcript.status === "error") {
       throw new Error(`AssemblyAI error: ${transcript.error}`);
     }
@@ -89,12 +97,21 @@ export class AssemblyAIProvider {
     return result;
   }
 
-  private mapTranscript(t: any, id: string): AssemblyAIResult {
-    const toWord = (w: any): TimestampedWord => ({
+  private mapTranscript(
+    t: {
+      id?: string | null;
+      audio_duration?: number | null;
+      speech_model_used?: string | null;
+      utterances?: { speaker: string; text: string; start?: number | null; end?: number | null; confidence?: number | null; words?: AaiWord[] | null }[] | null;
+      words?: AaiWord[] | null;
+    },
+    id: string,
+  ): AssemblyAIResult {
+    const toWord = (w: AaiWord): TimestampedWord => ({
       text: w.text,
       start: (w.start || 0) / 1000,
       end: (w.end || 0) / 1000,
-      confidence: w.confidence,
+      confidence: w.confidence ?? undefined,
     });
 
     const utterances: TimestampedUtterance[] = [];
@@ -107,7 +124,7 @@ export class AssemblyAIProvider {
         text: u.text,
         start: (u.start || 0) / 1000,
         end: (u.end || 0) / 1000,
-        confidence: u.confidence,
+        confidence: u.confidence ?? undefined,
         words: (u.words || []).map(toWord),
       });
     }
@@ -122,10 +139,10 @@ export class AssemblyAIProvider {
       utterances,
       words,
       durationSec,
-      audioDurationSec: t.audio_duration, // AssemblyAI returns seconds (not ms)
+      audioDurationSec: t.audio_duration ?? undefined, // AssemblyAI returns seconds (not ms)
       speakers: [...speakers].sort(),
-      transcriptId: t.id || id,
-      speechModelUsed: t.speech_model_used,
+      transcriptId: t.id ?? id,
+      speechModelUsed: t.speech_model_used ?? undefined,
       hasDiarization: true,
     };
   }
