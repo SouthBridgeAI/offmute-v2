@@ -1,6 +1,6 @@
 {
   "name": "offmute-v2",
-  "version": "1.0.0-opus.0",
+  "version": "0.0.1-opus.0",
   "description": "Timestamp-correct, diarized meeting transcription combining multimodal LLMs with ASR timing.",
   "repository": {
     "type": "git",
