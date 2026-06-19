@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { alignWords } from "../src/align/edit-distance.js";
 import { tokenize } from "../src/align/normalize.js";
 import { alignSegments } from "../src/align/aligner.js";
+import { partitionByOwnership } from "../src/transcribe/llm-transcribe.js";
 import type { ParsedLlmSegment } from "../src/transcribe/llm-transcribe.js";
 import type { TimestampedWord } from "../src/core/types.js";
 
@@ -109,5 +110,31 @@ describe("alignSegments", () => {
   it("handles empty LLM segments gracefully", () => {
     const out = alignSegments([], [word("hi", 0, 1)]);
     expect(out).toHaveLength(0);
+  });
+});
+
+describe("partitionByOwnership", () => {
+  const s = (start: number, end: number, trustedStart?: number): ParsedLlmSegment => ({
+    speaker: "A",
+    startSec: start,
+    endSec: end,
+    text: "x",
+    tone: [],
+    rawStart: "00:00",
+    rawEnd: "00:00",
+    trustedStart,
+  });
+
+  it("drops overlap-region segments whose center is before trustedStart", () => {
+    // Chunk 1 owns [600, ...]; a segment at 570 (center) is in the overlap owned by chunk 0.
+    const out = partitionByOwnership([s(560, 580, 600), s(610, 630, 600), s(0, 10, 0)]);
+    // 560-580 center=570 < 600 -> dropped. 610-630 center=620 >= 600 -> kept. 0-10 -> kept.
+    expect(out).toHaveLength(2);
+    expect(out.find((x) => x.startSec === 560)).toBeUndefined();
+  });
+
+  it("keeps segments with no trustedStart (e.g. gap-fill)", () => {
+    const out = partitionByOwnership([s(5, 8)]);
+    expect(out).toHaveLength(1);
   });
 });

@@ -17,6 +17,12 @@ export interface ParsedLlmSegment {
   tone: string[];
   rawStart: string;
   rawEnd: string;
+  /** Source chunk index (set by the pipeline; used for ownership partitioning). */
+  chunkIndex?: number;
+  /** Trusted-start (absolute) of the source chunk — content before this is overlap
+   * owned by the previous chunk. Segments whose center is before this are dropped to
+   * avoid double-printing the overlap region. */
+  trustedStart?: number;
 }
 
 export interface ChunkTranscriptionResult {
@@ -33,6 +39,22 @@ const MIN_SPAN_RATIO = 0.6;
 function toAbsolute(mmSs: string, offset: number): number | null {
   const s = parseMmSs(mmSs.trim());
   return s === null ? null : s + offset;
+}
+
+/**
+ * Ownership partition: drop segments whose center time falls in the overlap region owned
+ * by the PREVIOUS chunk (center < trustedStart). Segments without a trustedStart (e.g.
+ * gap-fill inserts) are kept. This structurally guarantees every word is emitted by exactly
+ * one chunk — no overlap double-printing — which fuzzy dedup can miss (e.g. when overlap
+ * duplicates map to different speakers). Kept as the primary dedup; finalize's fuzzy dedup
+ * is a safety net.
+ */
+export function partitionByOwnership(segments: ParsedLlmSegment[]): ParsedLlmSegment[] {
+  return segments.filter((s) => {
+    if (s.trustedStart === undefined) return true; // no chunk info -> keep
+    const center = (s.startSec + s.endSec) / 2;
+    return center >= s.trustedStart;
+  });
 }
 
 /** Parse + offset-adjust raw LLM segments. Drops unparseable ones (with a warning). */
