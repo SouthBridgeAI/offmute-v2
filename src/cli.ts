@@ -26,7 +26,10 @@ program
   .version(packageVersion)
   .argument("<input>", "input video/audio file")
   .option("-o, --output <dir>", "output directory", "./output")
-  .option("-i, --intermediates <dir>", "intermediates directory", "./intermediates")
+  .option(
+    "-i, --intermediates <dir>",
+    "intermediates directory (default: auto-derived per input file so caches never collide)",
+  )
   .option("--instructions <text>", "custom instructions for the LLM")
   .option("--passes <list>", "comma-separated passes to run")
   .option("--chunk-seconds <n>", "chunk duration in seconds", "600")

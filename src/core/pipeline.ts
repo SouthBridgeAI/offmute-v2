@@ -10,6 +10,7 @@ import {
   resolveKeys,
   resolveOptions,
   planChunks,
+  inputSignature,
   DEFAULT_PASSES,
   type PipelineOptions,
   type Pass,
@@ -78,8 +79,30 @@ export async function transcribe(opts: PipelineOptions): Promise<TranscriptResul
   const options = resolveOptions(opts);
   const keys = resolveKeys(options.apiKeys);
   logger.setLevel(options.logLevel);
+
+  // Early validation (the "nice check at the beginning"): input must exist before we
+  // do anything, and we create both working directories up front so we never die late
+  // on a missing output/intermediates dir.
+  if (!existsSync(options.input)) {
+    throw new Error(`Input file not found: ${options.input}`);
+  }
   mkdirSync(options.intermediatesDir, { recursive: true });
   mkdirSync(options.outputDir, { recursive: true });
+
+  // Input-identity manifest: if the file at this path changed (different size/mtime, or
+  // a different file now occupies the path), invalidate ALL caches automatically. This
+  // is what prevents a new input from reusing a previous file's intermediates.
+  const sourcePath = `${options.intermediatesDir}/source.json`;
+  const sig = inputSignature(options.input);
+  const prevSig = readJson<{ signature?: string; input?: string }>(sourcePath);
+  const inputChanged = !prevSig || prevSig.signature !== sig;
+  if (inputChanged && prevSig) {
+    logger.warn(
+      `input file changed since last run (was ${prevSig.input ?? "?"}) — discarding cached intermediates`,
+    );
+  }
+  const forceAll = options.force || inputChanged;
+  writeJson(sourcePath, { input: options.input, signature: sig, updatedAt: new Date().toISOString() });
 
   const passes = options.passes;
   const models = {
@@ -93,23 +116,27 @@ export async function transcribe(opts: PipelineOptions): Promise<TranscriptResul
   // ---------- 1. PREPROCESS ----------
   let probeInfo: ProbeResult | null = null;
   const audioPath = `${options.intermediatesDir}/audio.flac`;
+  const probePath = `${options.intermediatesDir}/probe.json`;
   if (has(passes, "preprocess")) {
     logger.info("=== preprocess ===");
-    probeInfo = readJson<ProbeResult>(`${options.intermediatesDir}/probe.json`) ?? (await probe(options.input));
-    writeJson(`${options.intermediatesDir}/probe.json`, probeInfo);
-    if (!existsSync(audioPath) || options.force) {
+    probeInfo = forceAll ? null : readJson<ProbeResult>(probePath);
+    if (!probeInfo) {
+      probeInfo = await probe(options.input);
+      writeJson(probePath, probeInfo);
+    }
+    if (!existsSync(audioPath) || forceAll) {
       logger.info("extracting audio (mono 16kHz FLAC)...");
       await extractAudio(options.input, audioPath, { format: "flac" });
     }
     if (probeInfo.hasVideo) {
       const kfDir = `${options.intermediatesDir}/keyframes`;
-      if (!existsSync(kfDir) || options.force) {
+      if (!existsSync(kfDir) || forceAll) {
         logger.info("extracting keyframes...");
         await extractKeyframes(options.input, kfDir, options.screenshotCount);
       }
     }
   } else {
-    probeInfo = readJson<ProbeResult>(`${options.intermediatesDir}/probe.json`);
+    probeInfo = forceAll ? null : readJson<ProbeResult>(probePath);
   }
   if (!probeInfo) throw new Error("probe info missing (run preprocess)");
   const duration = probeInfo.duration;
@@ -118,12 +145,12 @@ export async function transcribe(opts: PipelineOptions): Promise<TranscriptResul
   let description: MeetingDescription | null = null;
   if (has(passes, "describe")) {
     const descPath = `${options.intermediatesDir}/description.json`;
-    description = options.force ? null : readJson<MeetingDescription>(descPath);
+    description = forceAll ? null : readJson<MeetingDescription>(descPath);
     if (!description) {
       logger.info("=== describe ===");
       const client = new GeminiClient(keys.gemini!);
       const samplePath = `${options.intermediatesDir}/sample.flac`;
-      if (!existsSync(samplePath)) {
+      if (!existsSync(samplePath) || forceAll) {
         await extractChunk(audioPath, samplePath, 0, Math.min(300, duration), { format: "flac" });
       }
       const files = [{ path: samplePath }];
@@ -139,7 +166,7 @@ export async function transcribe(opts: PipelineOptions): Promise<TranscriptResul
       logger.info(`description: ${description.description.slice(0, 120)}...`);
     }
   } else {
-    description = readJson<MeetingDescription>(`${options.intermediatesDir}/description.json`);
+    description = forceAll ? null : readJson<MeetingDescription>(`${options.intermediatesDir}/description.json`);
   }
 
   // ---------- 3. LLM-TRANSCRIBE (per chunk, concurrent) ----------
@@ -170,13 +197,13 @@ export async function transcribe(opts: PipelineOptions): Promise<TranscriptResul
 
     llmChunkResults = await mapPool(chunks, options.concurrency, async (chunk) => {
       const parsedPath = `${llmDir}/chunk_${String(chunk.index).padStart(2, "0")}_parsed.json`;
-      const cached = options.force ? null : readJson<ChunkTranscriptionResult>(parsedPath);
+      const cached = forceAll ? null : readJson<ChunkTranscriptionResult>(parsedPath);
       if (cached && cached.segments.length > 0) {
         logger.info(`chunk ${chunk.index}: cached (${cached.segments.length} segments)`);
         return cached;
       }
       const chunkPath = `${llmDir}/chunk_${String(chunk.index).padStart(2, "0")}.flac`;
-      if (!existsSync(chunkPath)) {
+      if (!existsSync(chunkPath) || forceAll) {
         await extractChunk(audioPath, chunkPath, chunk.start, chunk.end, { format: "flac" });
       }
       // Previous tail for continuity (best-effort: from prior chunk's cached result).
@@ -210,9 +237,9 @@ export async function transcribe(opts: PipelineOptions): Promise<TranscriptResul
       return result;
     });
   } else {
-    // Load all chunk results from disk.
+    // Load all chunk results from disk (only if caches are valid for this input).
     const llmDir = `${options.intermediatesDir}/llm`;
-    if (existsSync(llmDir)) {
+    if (!forceAll && existsSync(llmDir)) {
       const files = await import("node:fs/promises").then((m) => m.readdir(llmDir));
       llmChunkResults = files
         .filter((f) => f.endsWith("_parsed.json"))
@@ -256,7 +283,7 @@ export async function transcribe(opts: PipelineOptions): Promise<TranscriptResul
       writeJson(`${options.intermediatesDir}/timestamped.json`, asrResult);
     }
   } else {
-    asrResult = readJson(`${options.intermediatesDir}/timestamped.json`);
+    asrResult = forceAll ? null : readJson(`${options.intermediatesDir}/timestamped.json`);
   }
 
   // ---------- 5. ALIGN ----------
@@ -266,7 +293,7 @@ export async function transcribe(opts: PipelineOptions): Promise<TranscriptResul
     aligned = alignSegments(allLlmSegments, asrResult.words, { timeMarginSec: 30 });
     writeJson(`${options.intermediatesDir}/aligned.json`, aligned);
   } else {
-    aligned = readJson(`${options.intermediatesDir}/aligned.json`) ?? [];
+    aligned = (forceAll ? null : readJson<AlignedSegment[]>(`${options.intermediatesDir}/aligned.json`)) ?? [];
   }
   const alignedOk = aligned.filter((a) => a.timingSource !== "coarse").length;
   logger.info(`aligned: ${alignedOk}/${aligned.length} with ASR timing`);
@@ -292,7 +319,11 @@ export async function transcribe(opts: PipelineOptions): Promise<TranscriptResul
     speakers = cons.speakers;
     writeJson(`${options.intermediatesDir}/consistent.json`, { segments, speakers });
   } else {
-    const c = readJson<{ segments: AlignedSegment[]; speakers: typeof speakers }>(`${options.intermediatesDir}/consistent.json`);
+    const c = forceAll
+      ? null
+      : readJson<{ segments: AlignedSegment[]; speakers: typeof speakers }>(
+          `${options.intermediatesDir}/consistent.json`,
+        );
     if (c) {
       segments = c.segments;
       speakers = c.speakers;
@@ -333,7 +364,7 @@ export async function transcribe(opts: PipelineOptions): Promise<TranscriptResul
     finalSegments = finalizeSegments(segments);
     writeJson(`${options.intermediatesDir}/final.json`, finalSegments);
   } else {
-    finalSegments = readJson(`${options.intermediatesDir}/final.json`) ?? [];
+    finalSegments = (forceAll ? null : readJson<Segment[]>(`${options.intermediatesDir}/final.json`)) ?? [];
   }
   logger.info(`final segments: ${finalSegments.length}`);
 

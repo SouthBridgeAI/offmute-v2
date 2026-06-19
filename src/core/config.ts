@@ -5,6 +5,9 @@
  * every key can also be injected via the options object. Injected keys always win.
  */
 import type { ChunkPlan } from "./types.js";
+import { createHash } from "node:crypto";
+import { basename, resolve } from "node:path";
+import { statSync } from "node:fs";
 
 /** All supported provider keys. */
 export interface ApiKeys {
@@ -32,8 +35,9 @@ export interface PipelineOptions {
   input: string;
   /** Output directory. */
   outputDir: string;
-  /** Directory for intermediates (resumable). */
-  intermediatesDir: string;
+  /** Directory for intermediates (resumable). If omitted, derived per-input so
+   * different files never share a cache (see deriveIntermediatesDir). */
+  intermediatesDir?: string;
   /** Free-form instructions forwarded to the LLM. */
   instructions?: string;
   /** Known speaker names (skip identification, map by best effort). */
@@ -143,7 +147,7 @@ export function resolveOptions(opts: PipelineOptions): Required<
   return {
     input: opts.input,
     outputDir: opts.outputDir,
-    intermediatesDir: opts.intermediatesDir,
+    intermediatesDir: opts.intermediatesDir ?? deriveIntermediatesDir(opts.input),
     instructions: opts.instructions,
     knownSpeakers: opts.knownSpeakers,
     passes: (() => {
@@ -175,6 +179,42 @@ export function resolveOptions(opts: PipelineOptions): Required<
     showProgress: opts.showProgress ?? true,
     logLevel: opts.logLevel ?? "info",
   };
+}
+
+/**
+ * Derive a per-input intermediates directory so different input files never share a
+ * cache (the default-`./intermediates` collision bug). Keyed by the input's absolute
+ * path hash + basename, e.g. `./intermediates/vmeeting-a1b2c3d4`.
+ */
+export function deriveIntermediatesDir(input: string): string {
+  const abs = resolve(input);
+  const hash = createHash("sha1").update(abs).digest("hex").slice(0, 8);
+  const base = basename(input, extOf(input)) || "input";
+  return `./intermediates/${base}-${hash}`;
+}
+
+function extOf(p: string): string {
+  const i = p.lastIndexOf(".");
+  return i >= 0 ? p.slice(i) : "";
+}
+
+/**
+ * A cheap, stable signature of the input file identity (absolute path + size + mtime).
+ * Used to detect when the file at a given path has changed (or a different file now sits
+ * there) so cached intermediates are invalidated automatically. Uses size+mtime rather
+ * than a content hash to avoid hashing multi-GB files.
+ */
+export function inputSignature(input: string): string {
+  let size = 0;
+  let mtime = 0;
+  try {
+    const st = statSync(input);
+    size = st.size;
+    mtime = Math.floor(st.mtimeMs);
+  } catch {
+    /* missing file — signature still includes path */
+  }
+  return createHash("sha1").update(`${resolve(input)}|${size}|${mtime}`).digest("hex");
 }
 
 /** Build a chunk plan with overlap + trustedStart (for clean dedup). */
