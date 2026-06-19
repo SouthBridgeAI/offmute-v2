@@ -13,8 +13,7 @@
     "url": "https://github.com/SouthBridgeAI/offmute-v2/issues"
   },
   "publishConfig": {
-    "access": "public",
-    "provenance": true
+    "access": "public"
   },
   "type": "module",
   "main": "./dist/index.cjs",
@@ -80,11 +79,7 @@
     "@ffmpeg/util": "^0.12.0"
   },
   "peerDependenciesMeta": {
-    "@ffmpeg/ffmpeg": {
-      "optional": true
-    },
-    "@ffmpeg/util": {
-      "optional": true
-    }
+    "@ffmpeg/ffmpeg": { "optional": true },
+    "@ffmpeg/util": { "optional": true }
   }
 }
