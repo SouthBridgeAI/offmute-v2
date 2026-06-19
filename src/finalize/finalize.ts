@@ -119,7 +119,9 @@ export function finalizeSegments(
     end: s.end,
     speaker: s.speaker,
     speakerName: s.speakerName || s.speaker,
-    text: s.text.trim(),
+    // Collapse any internal whitespace (incl. newlines) so a stray blank line in the LLM
+    // text can never split one SRT cue into several — SRT cues end at a blank line.
+    text: s.text.trim().replace(/\s+/g, " "),
     tone: s.tone,
     timingSource: s.timingSource,
     confidence: s.confidence,
