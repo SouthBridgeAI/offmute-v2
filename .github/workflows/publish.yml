@@ -1,0 +1,86 @@
+name: Publish to npm
+
+# Publishes offmute-v2 via npm Trusted Publishing (OIDC) — no long-lived token.
+# One workflow serves both builds (npm allows only one trusted publisher per package):
+#   - glm branch  (version like 1.0.0)        -> npm dist-tags: latest + glm
+#   - opus branch (version like 1.0.0-opus.N) -> npm dist-tag:  opus
+# The variant is detected from the package.json version at the released commit, so it
+# doesn't matter which branch the Release tag points at.
+#
+# Trigger: creating a GitHub Release (tag the commit on glm or opus, then publish a Release).
+# Requirements (already satisfied here): GitHub-hosted runner, Node 24 + npm >= 11.5.1,
+# id-token: write, and NO NODE_AUTH_TOKEN. Provenance requires a PUBLIC repo.
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  id-token: write # OIDC token for npm trusted publishing
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Determine variant + dist-tag from version
+        id: pkg
+        run: |
+          VERSION="$(node -p "require('./package.json').version")"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          if [[ "$VERSION" == *-opus* ]]; then
+            echo "variant=opus" >> "$GITHUB_OUTPUT"
+          else
+            echo "variant=glm" >> "$GITHUB_OUTPUT"
+          fi
+          echo "Publishing offmute-v2@$VERSION"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Ensure npm supports OIDC (>= 11.5.1)
+        run: npm install -g npm@latest
+
+      # --- build: glm uses npm, opus uses bun ---
+      - name: Setup Bun (opus build toolchain)
+        if: steps.pkg.outputs.variant == 'opus'
+        uses: oven-sh/setup-bun@v2
+
+      - name: Install & build (opus)
+        if: steps.pkg.outputs.variant == 'opus'
+        run: |
+          bun install --frozen-lockfile
+          bun run build
+
+      - name: Install & build (glm)
+        if: steps.pkg.outputs.variant == 'glm'
+        run: |
+          npm ci
+          npm run build
+
+      - name: Skip if this version is already on npm
+        id: guard
+        run: |
+          if npm view "offmute-v2@${{ steps.pkg.outputs.version }}" version >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "offmute-v2@${{ steps.pkg.outputs.version }} already published — skipping."
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # opus -> @opus (prerelease version keeps it off @latest)
+      - name: Publish opus build (@opus)
+        if: steps.pkg.outputs.variant == 'opus' && steps.guard.outputs.exists == 'false'
+        run: npm publish --provenance --access public --tag opus
+
+      # glm -> @latest, then also point @glm at the same version
+      - name: Publish glm build (@latest + @glm)
+        if: steps.pkg.outputs.variant == 'glm' && steps.guard.outputs.exists == 'false'
+        run: |
+          npm publish --provenance --access public
+          npm dist-tag add "offmute-v2@${{ steps.pkg.outputs.version }}" glm

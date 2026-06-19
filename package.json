@@ -2,6 +2,18 @@
   "name": "offmute-v2",
   "version": "1.0.0-opus.0",
   "description": "Timestamp-correct, diarized meeting transcription combining multimodal LLMs with ASR timing.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/SouthBridgeAI/offmute-v2.git"
+  },
+  "homepage": "https://github.com/SouthBridgeAI/offmute-v2#readme",
+  "bugs": {
+    "url": "https://github.com/SouthBridgeAI/offmute-v2/issues"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
   "type": "module",
   "bin": {
     "offmute-v2": "./dist/cli.js"
