@@ -6,8 +6,9 @@
  */
 import type { ChunkPlan } from "./types.js";
 import { createHash } from "node:crypto";
-import { basename, dirname, resolve } from "node:path";
+import { basename, resolve } from "node:path";
 import { statSync } from "node:fs";
+import { tmpdir } from "node:os";
 
 /** All supported provider keys. */
 export interface ApiKeys {
@@ -189,16 +190,17 @@ export function resolveOptions(opts: PipelineOptions): Required<
 }
 
 /**
- * Derive a per-input intermediates directory so different input files never share a
- * cache. Anchored to the INPUT FILE's directory (not the current working directory),
- * so the location is stable regardless of where the tool is run from — e.g.
- * `/path/to/.offmute-v2-vmeeting-a1b2c3d4`. Pass `-i` to override.
+ * Derive a per-input intermediates directory in the OS temp dir, so we never clutter the
+ * folder next to the user's media (and the OS reclaims the space). Keyed by the input's
+ * absolute path so different files never share a cache — e.g.
+ * `/var/folders/.../offmute-v2-vmeeting-a1b2c3d4`. The pipeline logs this path on every run
+ * so it's easy to open; pass `-i` to override (e.g. to keep intermediates next to outputs).
  */
 export function deriveIntermediatesDir(input: string): string {
   const abs = resolve(input);
   const hash = createHash("sha1").update(abs).digest("hex").slice(0, 8);
   const base = basename(input, extOf(input)) || "input";
-  return `${dirname(abs)}/.offmute-v2-${base}-${hash}`;
+  return `${tmpdir()}/offmute-v2-${base}-${hash}`;
 }
 
 function extOf(p: string): string {

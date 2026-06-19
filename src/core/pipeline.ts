@@ -44,7 +44,7 @@ import { identifySpeakers } from "../diarize/identify.js";
 import { OpenAICompatClient } from "../providers/openai-compat.js";
 import { finalizeSegments } from "../finalize/finalize.js";
 import { formatSrt, formatMarkdown, formatJson } from "../finalize/format.js";
-import { basename } from "node:path";
+import { basename, resolve } from "node:path";
 
 const JSON_OPTS = { encoding: "utf-8" } as const;
 
@@ -101,6 +101,9 @@ export async function transcribe(opts: PipelineOptions): Promise<TranscriptResul
   }
   mkdirSync(options.intermediatesDir, { recursive: true });
   mkdirSync(options.outputDir, { recursive: true });
+  // Surface where the working files live (defaults to the OS temp dir) so it's easy to open
+  // — most terminals linkify the file:// URL. Pass -i to put it somewhere permanent.
+  logger.info(`intermediates: ${resolve(options.intermediatesDir)}  (file://${resolve(options.intermediatesDir)})`);
   // Log every LLM call (prompt + response + usage + timing) for validation.
   setLlmLogPath(options.llmLog ? `${options.intermediatesDir}/llm-calls.jsonl` : null);
 
@@ -160,7 +163,11 @@ export async function transcribe(opts: PipelineOptions): Promise<TranscriptResul
 
   // ---------- 1. PREPROCESS ----------
   let probeInfo: ProbeResult | null = null;
-  const audioPath = `${options.intermediatesDir}/audio.flac`;
+  // Intermediate audio is compact mono 16kHz mp3 (transparent for speech ASR/LLM) rather
+  // than lossless FLAC — a full meeting's audio + per-chunk slices would otherwise duplicate
+  // a large lossless copy of the media in the cache.
+  const AUDIO_OPTS = { format: "mp3", bitrate: "64k" } as const;
+  const audioPath = `${options.intermediatesDir}/audio.mp3`;
   const probePath = `${options.intermediatesDir}/probe.json`;
   if (has(passes, "preprocess")) {
     logger.info("=== preprocess ===");
@@ -170,8 +177,8 @@ export async function transcribe(opts: PipelineOptions): Promise<TranscriptResul
       writeJson(probePath, probeInfo);
     }
     if (!existsSync(audioPath) || forceAll) {
-      logger.info("extracting audio (mono 16kHz FLAC)...");
-      await extractAudio(options.input, audioPath, { format: "flac" });
+      logger.info("extracting audio (mono 16kHz mp3)...");
+      await extractAudio(options.input, audioPath, AUDIO_OPTS);
     }
     if (probeInfo.hasVideo) {
       const kfDir = `${options.intermediatesDir}/keyframes`;
@@ -194,9 +201,9 @@ export async function transcribe(opts: PipelineOptions): Promise<TranscriptResul
     if (!description) {
       logger.info("=== describe ===");
       const client = new GeminiClient(keys.gemini!);
-      const samplePath = `${options.intermediatesDir}/sample.flac`;
+      const samplePath = `${options.intermediatesDir}/sample.mp3`;
       if (!existsSync(samplePath) || forceAll) {
-        await extractChunk(audioPath, samplePath, 0, Math.min(300, duration), { format: "flac" });
+        await extractChunk(audioPath, samplePath, 0, Math.min(300, duration), AUDIO_OPTS);
       }
       const files = [{ path: samplePath }];
       const kfDir = `${options.intermediatesDir}/keyframes`;
@@ -263,9 +270,9 @@ export async function transcribe(opts: PipelineOptions): Promise<TranscriptResul
         logger.info(`chunk ${chunk.index}: cached (${cached.segments.length} segments)`);
         return tagWith(cached, chunk);
       }
-      const chunkPath = `${llmDir}/chunk_${String(chunk.index).padStart(2, "0")}.flac`;
+      const chunkPath = `${llmDir}/chunk_${String(chunk.index).padStart(2, "0")}.mp3`;
       if (!existsSync(chunkPath) || forceAll) {
-        await extractChunk(audioPath, chunkPath, chunk.start, chunk.end, { format: "flac" });
+        await extractChunk(audioPath, chunkPath, chunk.start, chunk.end, AUDIO_OPTS);
       }
       // Previous tail for continuity (best-effort: from prior chunk's cached result).
       let previousTail: string | undefined;
@@ -351,13 +358,12 @@ export async function transcribe(opts: PipelineOptions): Promise<TranscriptResul
     if (provider === "whisper-groq") {
       logger.info("=== timestamped (Groq Whisper — no diarization) ===");
       if (!keys.groq) throw new Error("GROQ_API_KEY is required for whisper-groq");
-      // Groq's 25MB limit: use a compressed mono mp3.
-      const mp3Path = `${options.intermediatesDir}/audio.mp3`;
-      if (!existsSync(mp3Path) || options.force) {
-        await extractAudio(options.input, mp3Path, { format: "mp3", bitrate: "64k" });
+      // Reuse the compact mono 16kHz mp3 from preprocess (also satisfies Groq's 25MB limit).
+      if (!existsSync(audioPath) || forceAll) {
+        await extractAudio(options.input, audioPath, AUDIO_OPTS);
       }
       const { readFile } = await import("node:fs/promises");
-      const buf = await readFile(mp3Path);
+      const buf = await readFile(audioPath);
       const groq = new WhisperGroqClient(keys.groq!);
       asrResult = await groq.transcribe(buf);
       writeJson(`${options.intermediatesDir}/timestamped.json`, asrResult);

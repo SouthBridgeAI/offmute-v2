@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { configSignature } from "../src/core/config.js";
+import { tmpdir } from "node:os";
+import { configSignature, deriveIntermediatesDir } from "../src/core/config.js";
 import { resolveThinking, isThinkingConfigError } from "../src/providers/gemini.js";
 import { transcribe } from "../src/core/pipeline.js";
 
@@ -24,6 +25,19 @@ describe("configSignature (cache invalidation on option change)", () => {
   it("is stable for options that don't affect intermediates", () => {
     const ref = configSignature(base);
     expect(configSignature({ ...base, outputDir: "other", formats: ["srt"], concurrency: 1, logLevel: "debug" })).toBe(ref);
+  });
+});
+
+describe("deriveIntermediatesDir (defaults to OS temp dir)", () => {
+  it("places the cache under the OS tmp dir, not next to the input", () => {
+    const d = deriveIntermediatesDir("/some/where/meeting.mp4");
+    expect(d.startsWith(tmpdir())).toBe(true);
+    expect(d).not.toContain("/some/where/.offmute");
+    expect(d).toContain("offmute-v2-meeting-");
+  });
+  it("is stable per input path and distinct across inputs", () => {
+    expect(deriveIntermediatesDir("/a/x.mp4")).toBe(deriveIntermediatesDir("/a/x.mp4"));
+    expect(deriveIntermediatesDir("/a/x.mp4")).not.toBe(deriveIntermediatesDir("/b/x.mp4"));
   });
 });
 

@@ -107,9 +107,10 @@ and an independent re-score live in [`docs/`](#receipts--how-this-repo-was-built
 - 🎬 **Video-aware** — samples keyframes for visual context (who's on screen, demos, slides).
 - ⚡ **Chunked + concurrent** — long files are split with overlap and stitched back with
   **ownership-partition** dedup (no double-printed sentences at chunk seams).
-- ♻️ **Resumable & stoppable** — every stage caches to disk; re-runs skip finished work, Ctrl-C
-  leaves partials. The cache is keyed on the input **and** the config, so changing `--model` never
-  serves you a stale transcript.
+- ♻️ **Resumable & stoppable** — every stage caches to disk (in the **OS temp dir** by default;
+  the path is printed each run, and `-i <dir>` keeps it wherever you like). Re-runs skip finished
+  work, Ctrl-C leaves partials. The cache is keyed on the input **and** the config, so changing
+  `--model` never serves you a stale transcript.
 - 🔀 **Pluggable providers** — Gemini for the LLM; AssemblyAI *or* Groq Whisper for timing.
 - 🌐 **Runs in the browser** — a pure, node-free core + `fetch` providers + ffmpeg.wasm.
 - 🔎 **Fully inspectable** — every LLM prompt+response is logged to `llm-calls.jsonl`; all
@@ -180,8 +181,8 @@ node-only imports**, so it bundles tiny and runs in the browser via `offmute-v2/
 A multi-stage pipeline where each stage persists a JSON intermediate (so it's resumable and
 debuggable):
 
-1. **preprocess** — ffmpeg → 16 kHz mono FLAC + scene-aware keyframes (a 9.6 GB `.mov` becomes a
-   ~76 MB FLAC in seconds).
+1. **preprocess** — ffmpeg → compact mono 16 kHz **mp3** + scene-aware keyframes (a 9.6 GB `.mov`
+   becomes a few MB of audio in seconds — transparent for speech, but a fraction of lossless size).
 2. **describe** — a quick multimodal pass builds a meeting summary + speaker roster to prime
    transcription.
 3. **llm-transcribe** — each chunk goes to the LLM for verbatim text, diarization, and tone. Output
