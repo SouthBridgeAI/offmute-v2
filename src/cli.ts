@@ -88,6 +88,12 @@ transcribe({
     console.log(`Done. ${segs} segments.`);
   })
   .catch((err) => {
-    console.error("Fatal:", err);
+    // Print a clean, single-line message for expected errors (missing keys/ffmpeg/input,
+    // bad model, network). The full stack is only shown in debug mode (or OFFMUTE_DEBUG).
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`\n✗ ${msg}`);
+    if (opts.logLevel === "debug" || process.env.OFFMUTE_DEBUG) {
+      console.error(err instanceof Error ? err.stack : err);
+    }
     process.exit(1);
   });

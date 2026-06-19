@@ -51,10 +51,25 @@ npx offmute-v2@glm  meeting.mp4
 npx offmute-v2@opus meeting.mp4
 ```
 
-Both publish the same `offmute-v2` CLI and library; they differ in pipeline internals (e.g. GLM's
-ASR-backbone consistency + gap-fill, Opus's ownership-partition merge + voice-anchored identify).
-See each branch's README for its full CLI/library/browser docs, and [`RELEASING.md`](RELEASING.md)
-for how the `latest` / `glm` / `opus` npm tags are published.
+As a library (this `master`/GLM line takes a single options object — `input` and `outputDir`
+are required):
+
+```ts
+import { transcribe } from "offmute-v2";
+
+const { segments, speakers } = await transcribe({
+  input: "meeting.mp4",
+  outputDir: "./out",
+  model: "gemini-flash-latest", // or gemini-2.5-pro, gemini-3.1-pro-preview, …
+  formats: ["srt", "md", "json"],
+  // apiKeys: { gemini, assemblyai }  // optional; falls back to env
+});
+```
+
+Both branches publish the same `offmute-v2` CLI and library; they differ in pipeline internals (e.g.
+GLM's ASR-backbone consistency + gap-fill, Opus's ownership-partition merge + voice-anchored
+identify) and in the library call shape (the Opus build uses `transcribe(input, options)`). See each
+branch's README and [`RELEASING.md`](RELEASING.md) for the `latest` / `glm` / `opus` npm tags.
 
 ## Build from source
 

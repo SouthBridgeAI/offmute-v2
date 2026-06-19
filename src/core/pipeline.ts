@@ -11,6 +11,7 @@ import {
   resolveOptions,
   planChunks,
   inputSignature,
+  configSignature,
   DEFAULT_PASSES,
   DEFAULT_TRANSCRIBE_MODEL,
   DEFAULT_REASONER_MODEL,
@@ -79,6 +80,15 @@ function has(passes: Pass[], p: Pass): boolean {
 }
 
 export async function transcribe(opts: PipelineOptions): Promise<TranscriptResult> {
+  // Validate the required options up front with clear messages (rather than crashing
+  // deep in path-resolution when called as a library without input/outputDir).
+  if (!opts || typeof opts.input !== "string" || opts.input.length === 0) {
+    throw new Error("transcribe(options): 'input' (path to the audio/video file) is required");
+  }
+  if (typeof opts.outputDir !== "string" || opts.outputDir.length === 0) {
+    throw new Error("transcribe(options): 'outputDir' (directory for outputs) is required");
+  }
+
   const options = resolveOptions(opts);
   const keys = resolveKeys(options.apiKeys);
   logger.setLevel(options.logLevel);
@@ -97,17 +107,31 @@ export async function transcribe(opts: PipelineOptions): Promise<TranscriptResul
   // Input-identity manifest: if the file at this path changed (different size/mtime, or
   // a different file now occupies the path), invalidate ALL caches automatically. This
   // is what prevents a new input from reusing a previous file's intermediates.
+  // The manifest tracks both the input identity AND the config that affects intermediate
+  // contents. A change in EITHER invalidates the cache — so switching `--model`, chunking,
+  // instructions, etc. can never silently serve the previous config's transcript.
   const sourcePath = `${options.intermediatesDir}/source.json`;
   const sig = inputSignature(options.input);
-  const prevSig = readJson<{ signature?: string; input?: string }>(sourcePath);
+  const cfgSig = configSignature(opts);
+  const prevSig = readJson<{ signature?: string; config?: string; input?: string }>(sourcePath);
   const inputChanged = !prevSig || prevSig.signature !== sig;
+  const configChanged = !prevSig || prevSig.config !== cfgSig;
   if (inputChanged && prevSig) {
     logger.warn(
       `input file changed since last run (was ${prevSig.input ?? "?"}) — discarding cached intermediates`,
     );
+  } else if (configChanged && prevSig) {
+    logger.warn(
+      "options changed since last run (model / chunking / instructions / provider) — discarding cached intermediates",
+    );
   }
-  const forceAll = options.force || inputChanged;
-  writeJson(sourcePath, { input: options.input, signature: sig, updatedAt: new Date().toISOString() });
+  const forceAll = options.force || inputChanged || configChanged;
+  writeJson(sourcePath, {
+    input: options.input,
+    signature: sig,
+    config: cfgSig,
+    updatedAt: new Date().toISOString(),
+  });
 
   const passes = options.passes;
   const models = {
@@ -117,6 +141,22 @@ export async function transcribe(opts: PipelineOptions): Promise<TranscriptResul
 
   if (!(await checkFfmpeg())) throw new Error("ffmpeg/ffprobe not found in PATH");
   if (!keys.gemini) throw new Error("GEMINI_API_KEY (or GOOGLE_API_KEY) is required");
+
+  // Validate the timestamped-provider key up front too (before the expensive LLM pass),
+  // so a missing ASSEMBLYAI_API_KEY fails in milliseconds instead of after a full
+  // transcription run.
+  const tsProvider = options.timestampedProvider ?? "assemblyai";
+  const willTimestamp = has(passes, "timestamped") || has(passes, "align");
+  if (willTimestamp) {
+    if (tsProvider === "assemblyai" && !keys.assemblyai) {
+      throw new Error(
+        "ASSEMBLYAI_API_KEY is required for the timestamped pass (or use --timestamped whisper-groq)",
+      );
+    }
+    if (tsProvider === "whisper-groq" && !keys.groq) {
+      throw new Error("GROQ_API_KEY is required for --timestamped whisper-groq");
+    }
+  }
 
   // ---------- 1. PREPROCESS ----------
   let probeInfo: ProbeResult | null = null;
@@ -257,6 +297,17 @@ export async function transcribe(opts: PipelineOptions): Promise<TranscriptResul
       writeFileSync(`${llmDir}/chunk_${String(chunk.index).padStart(2, "0")}_raw.json`, result.raw);
       return tagWith(result, chunk);
     });
+
+    // Fail loudly if transcription produced nothing because every chunk hit an API/parse
+    // error (e.g. an unknown --model 404). Without this, an errored run would silently
+    // fall through to an ASR-only gap-fill and report a near-empty "success".
+    const errored = llmChunkResults.filter((r) => r.error);
+    const producedSegments = llmChunkResults.reduce((n, r) => n + r.segments.length, 0);
+    if (llmChunkResults.length > 0 && producedSegments === 0 && errored.length === llmChunkResults.length) {
+      throw new Error(
+        `LLM transcription failed for all ${llmChunkResults.length} chunk(s) with model "${models.transcribe}". First error: ${errored[0]!.error}`,
+      );
+    }
   } else {
     // Load all chunk results from disk (only if caches are valid for this input).
     const llmDir = `${options.intermediatesDir}/llm`;
@@ -408,7 +459,15 @@ export async function transcribe(opts: PipelineOptions): Promise<TranscriptResul
     sourceFile: options.input,
     duration,
     processedAt: new Date().toISOString(),
-    models: { transcribe: models.transcribe, timestamped: "assemblyai-universal-2" },
+    models: {
+      transcribe: models.transcribe,
+      timestamped:
+        tsProvider === "whisper-groq"
+          ? "whisper-large-v3 (groq)"
+          : tsProvider === "none"
+            ? "none"
+            : "assemblyai-universal-2",
+    },
     passes,
   };
   const result: TranscriptResult = { segments: finalSegments, speakers, metadata };

@@ -66,6 +66,35 @@ function detectMime(path: string): string {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+/**
+ * Per-model "thinking" configuration. The control is NOT uniform across the Gemini family,
+ * and the wrong/default level makes some models (esp. 3.x **pro**) over-think long audio —
+ * e.g. ~7x slower for transcription, which doesn't benefit from heavy reasoning. We tame it:
+ *  - gemini-2.5-*  → `thinkingBudget` (flash can disable with 0; pro can't fully disable → 128)
+ *  - gemini-3.x / *-latest → `thinkingLevel` (pro can't take MINIMAL → floor to LOW; flash MINIMAL)
+ *  - gemini-2.0-*  → no thinking control
+ * Returns the `thinkingConfig` fragment, or undefined when the model takes none.
+ */
+export function resolveThinking(model: string): Record<string, unknown> | undefined {
+  const m = model.toLowerCase();
+  if (m.includes("gemini-2.0")) return undefined;
+  if (m.includes("gemini-2.5")) {
+    return { thinkingBudget: m.includes("pro") ? 128 : 0 };
+  }
+  // 3.x (incl. gemini-3-*, gemini-3.1-*) and moving aliases like gemini-flash-latest /
+  // gemini-pro-latest use thinkingLevel. Pro rejects MINIMAL, so floor it to LOW.
+  if (m.includes("gemini-3") || m.includes("flash-latest") || m.includes("pro-latest")) {
+    return { thinkingLevel: m.includes("pro") ? "LOW" : "MINIMAL" };
+  }
+  return undefined;
+}
+
+/** Whether an error message looks like the model rejected our thinking config. */
+export function isThinkingConfigError(message: string | undefined): boolean {
+  if (!message) return false;
+  return /thinking/i.test(message) && /(not supported|invalid|unsupported|unknown name|unexpected)/i.test(message);
+}
+
 export class GeminiClient {
   private ai: GoogleGenAI;
 
@@ -124,6 +153,10 @@ export class GeminiClient {
         config.responseSchema = responseSchema;
       }
       if (systemInstruction) config.systemInstruction = systemInstruction;
+      // Tame per-model thinking (keeps pro fast for transcription). Dropped automatically
+      // if a model rejects it (see the catch below).
+      const thinking = resolveThinking(model);
+      if (thinking) config.thinkingConfig = thinking;
 
       const parts: Part[] = uploaded.map((f) => ({
         fileData: { fileUri: f.uri, mimeType: f.mimeType },
@@ -164,6 +197,13 @@ export class GeminiClient {
           return result;
         } catch (err) {
           lastError = err instanceof Error ? err.message : String(err);
+          // If the model rejected our thinking config, drop it for all subsequent attempts
+          // and retry (the next attempt then runs without any thinkingConfig).
+          if (config.thinkingConfig && isThinkingConfigError(lastError)) {
+            delete config.thinkingConfig;
+            logger.warn(`[gemini] model ${model} rejected thinking config — retrying without it`);
+            continue;
+          }
           logger.warn(`[gemini] attempt ${attempt + 1}/${maxRetries} failed: ${lastError}`);
           logLlmCall({
             ts: new Date(t0).toISOString(),

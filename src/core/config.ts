@@ -225,6 +225,29 @@ export function inputSignature(input: string): string {
   return createHash("sha1").update(`${resolve(input)}|${size}|${mtime}`).digest("hex");
 }
 
+/**
+ * Signature of the options that affect the *contents* of cached intermediates. If any of
+ * these change between runs (e.g. a different `--model`, chunking, instructions, or
+ * timestamped provider), the cache must be invalidated — otherwise a run would silently
+ * serve the previous config's output (e.g. switching to a `pro` model but getting the
+ * `flash` transcript back). Options that don't affect intermediates (formats, outputDir,
+ * concurrency, logging) are deliberately excluded so they don't trigger needless reruns.
+ */
+export function configSignature(o: PipelineOptions): string {
+  const relevant = {
+    model: o.model ?? DEFAULT_TRANSCRIBE_MODEL,
+    reasoner: o.reasoner ?? DEFAULT_REASONER_MODEL,
+    instructions: o.instructions ?? "",
+    knownSpeakers: o.knownSpeakers ?? [],
+    chunkDurationSec: o.chunkDurationSec ?? 600,
+    chunkOverlapSec: o.chunkOverlapSec ?? 60,
+    screenshotCount: o.screenshotCount ?? 6,
+    diarizationLevel: o.diarizationLevel ?? 2,
+    timestampedProvider: o.timestampedProvider ?? "assemblyai",
+  };
+  return createHash("sha1").update(JSON.stringify(relevant)).digest("hex");
+}
+
 /** Build a chunk plan with overlap + trustedStart (for clean dedup). */
 export function planChunks(
   totalDuration: number,
