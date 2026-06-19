@@ -7,7 +7,7 @@ Status: v1 design, architecture empirically validated (see process log Entry 3).
 Input: an audio/video file (+ optional natural-language instructions).
 Output: a **timestamp-correct, diarized transcript** with speaker names (when inferable) and tone annotations, available as **diarized SRT**, **Markdown**, and **JSON**.
 
-Hands-off by default; tunable (model tiers, number of passes, which modules run, instructions). Resumable from disk intermediates. Runnable as an npx CLI and (core) in the browser.
+Hands-off by default; tunable (model tier, which modules run, instructions). Resumable from disk intermediates; cancellable via `AbortSignal`. Runnable as an npx CLI and (fully) in the browser.
 
 ### Diarization success levels (target: 3)
 1. separation (who-speaks-when) · 2. anonymous-consistent (Speaker A/B) · 3. **identification** (real names from context).
@@ -30,13 +30,14 @@ input (audio/video [+ instructions])
   1. PROBE + PREPROCESS (node ffmpeg / browser ffmpeg.wasm)
   │    → 16k mono audio (full + per-chunk), keyframes (video), MediaInfo
   │
-  2. ASR PASS (timing track)            3. CONTEXT PASS (optional, video)
-  │    AssemblyAI → words[], utterances[]    keyframes+tag-audio → meeting description
-  │    (precise times + speaker hints)        (who/topics; offmute "describe")
+  2. ASR PASS (timing track)
+  │    AssemblyAI → words[], utterances[]   (precise times + speaker hints)
   │
-  4. DIARIZE PASS (content track)
-  │    Gemini(audio [+keyframes] + description + ASR-hint + instructions)
+  3. DIARIZE PASS (content track)
+  │    Gemini(audio + keyframes + ASR-hint + instructions)
   │    → turns[{speaker, tone, text, approxStart}]  (chunked if long; overlap)
+  │    NOTE: visual context is the keyframes passed DIRECTLY to each diarize call
+  │    (no separate offmute-style "describe" pass — it would be redundant here).
   │
   5. ALIGN
   │    map each LLM token → ASR word time; cut turns into sub-segments
@@ -80,7 +81,7 @@ Within a turn, split on sentence terminators and/or ASR gaps > ~0.7s, and cap cu
 ## 7. Chunking (long files)
 
 - ≤ ~30 min: single Gemini pass (validated; maxOut 65536 + thinkingBudget bounded).
-- Longer: chunk audio (~15 min, ~2 min overlap). ASR runs whole-file (cheap, no chunk needed). Gemini per chunk with: description + previous-chunk tail + ASR-hint for the chunk. Align each chunk to the whole-file ASR words restricted to the chunk's time window. Merge: dedup overlap by time+text (prefer the chunk where the turn is internal, not edge).
+- Longer: chunk audio (~15 min, ~2 min overlap). ASR runs whole-file (cheap, no chunk needed). Gemini per chunk with: previous-chunk tail + ASR-hint for the chunk + keyframes. Align each chunk to the whole-file ASR words restricted to the chunk's time window. Merge by ownership partition (each segment emitted by the chunk owning its center time); time+text dedup kept as a safety net.
 - Concurrency-limited (ipgu queue pattern).
 
 ## 8. Failure modes & detection
@@ -99,17 +100,20 @@ Within a turn, split on sentence terminators and/or ASR gaps > ~0.7s, and cap cu
 ```ts
 transcribe(input, {
   instructions?, asr?: 'assemblyai'|'none', asrModel?,
-  llm?: 'gemini-flash-latest'|'gemini-pro-latest'|..., llmThinkingBudget?,
-  useVideo?: boolean, keyframeCount?,
-  chunkMinutes?, chunkOverlapMinutes?,
+  llmModel?: 'gemini-flash-latest'|'gemini-pro-latest'|..., llmThinkingLevel?,
+  useVideo?: boolean, keyframeCount?, subSegment?,
+  chunkMinutes?, chunkOverlapMinutes?, maxSinglePassMinutes?,
   identifySpeakers?: boolean, knownSpeakers?: Record<label,name>,
-  passes?: number,                  // refinement passes
-  intermediatesDir?, cache?: boolean, onProgress?,
-  apiKeys?: { gemini?, assemblyai?, ... },
-}) → Transcript  (+ toSRT/toMarkdown/toJSON)
+  intermediatesDir?, cache?: boolean, logLlm?,
+  onProgress?, onLlmCall?, signal?: AbortSignal,
+  apiKeys?: { gemini?, assemblyai? },
+}) → { transcript, srt, markdown, json, text, asr, intermediatesDir }
 ```
 
-Keys from env or injected. Stoppable → returns best-so-far.
+Keys from env or injected. Cancellable via `signal` (cooperative, at stage/chunk
+boundaries). Resume across runs via the hash-keyed intermediates cache. (A multi-pass
+refinement loop and a graceful stop-and-emit-partial path are NOT implemented — see
+build order — though a running `transcript.partial.srt` is written per chunk.)
 
 ## 10. Packaging
 
@@ -129,10 +133,14 @@ Keys from env or injected. Stoppable → returns best-so-far.
 4. ✅ Speaker-identify pass (LLM merge + voice-anchored canonicalization).
 5. ✅ CLI (`offmute-v2`).
 6. ✅ Chunking for long files + overlap merge (validated: chunked ≈ single-pass).
-7. ✅ Browser entry (pure 32KB `core/assemble.ts` + `browser.ts`). ⏳ ffmpeg.wasm preprocessing + fetch providers left to the host (documented).
-8. ✅ README/docs, fresh-eyes code review applied, retries, 29 tests, strict tsc, tsup build.
+7. ✅ Browser: full `transcribeInBrowser()` — ffmpeg.wasm preprocessing + isomorphic fetch providers + the pure fusion core, runnable `examples/browser/`, verified end-to-end. Bundle ~49KB (`browser.js`).
+8. ✅ README/docs, fresh-eyes code review applied, retries, strict tsc, tsup build.
+9. ✅ Reviews 1–2 applied (audio-only keyframes, model thinking-config, intermediates location, LLM-call logging, JSON-mode identify, AbortSignal, stage-tagged errors, always-valid SRT) + comparison fixes (text format, DRY orchestration via `core/orchestrate.ts`, partial output). 40 tests.
 
-9. ✅ Browser: `transcribeInBrowser()` (ffmpeg.wasm + isomorphic fetch providers + core), runnable `examples/browser/`, verified end-to-end.
+### NOT implemented (be honest)
+- A multi-pass refinement loop (`passes`) — not built.
+- A graceful "stop and emit best-so-far" path — only `AbortSignal` (throws) + a per-chunk `transcript.partial.srt` exist.
+- Batch (multiple inputs per invocation) — one input per run.
 
 ### Chunk overlap = ownership partitioning
 Each chunk owns a contiguous span split at overlap midpoints (`chunkOwnership`); a segment is emitted by the chunk owning its center time, so every word appears exactly once — no fuzzy dedup as the primary mechanism (kept as a safety net). The chunk prompt asks for FULL transcription of each clip (the previous-tail is continuity context only).

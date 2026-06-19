@@ -12,7 +12,7 @@ import { buildAsrHint, buildDiarizationPrompt, DIARIZATION_SYSTEM } from "./core
 import { parseDiarizedText } from "./core/parse-diarized.js";
 import { alignTurnsToSegments, buildTranscript, type PlainSegment } from "./core/assemble.js";
 import { calculateChunks, chunkOwnership, mergeChunkSegments, type MergeableSegment } from "./core/chunk.js";
-import { toJSON, toMarkdown, toSRT } from "./core/format.js";
+import { toJSON, toMarkdown, toSRT, toText } from "./core/format.js";
 import { Intermediates } from "./node/intermediates.js";
 import { identifySpeakersLLM } from "./core/identify.js";
 
@@ -60,6 +60,8 @@ export interface TranscribeResult {
   srt: string;
   markdown: string;
   json: string;
+  /** plain-text transcript (speaker-grouped) */
+  text: string;
   intermediatesDir: string;
   asr?: AsrResult;
 }
@@ -323,12 +325,13 @@ export async function transcribe(
   const srt = toSRT(transcript, { includeSpeaker: true });
   const markdown = toMarkdown(transcript, { title: base });
   const json = toJSON(transcript);
+  const text = toText(transcript);
   inter.writeText("transcript.srt", srt);
   inter.writeText("transcript.md", markdown);
   inter.writeText("transcript.json", json);
 
   progress("done", `Done — ${transcript.segments.length} segments, ${transcript.speakers.length} speakers`, 100);
-  return { transcript, srt, markdown, json, intermediatesDir: interDir, asr };
+  return { transcript, srt, markdown, json, text, intermediatesDir: interDir, asr };
 }
 
 /** Build a minimal AsrResult whose utterances fall within [start,end]. When
