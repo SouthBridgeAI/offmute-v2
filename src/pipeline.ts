@@ -13,7 +13,7 @@ import { buildTranscript } from "./core/assemble.js";
 import { orchestrateChunks } from "./core/orchestrate.js";
 import { formatSrt } from "./core/srt.js";
 import { toJSON, toMarkdown, toSRT, toText } from "./core/format.js";
-import { Intermediates } from "./node/intermediates.js";
+import { Intermediates, mediaKey } from "./node/intermediates.js";
 import { identifySpeakersLLM } from "./core/identify.js";
 
 export interface ProgressEvent {
@@ -111,9 +111,32 @@ export async function transcribe(
   const interDir = options.intermediatesDir ?? join(dirname(input), `.offmute_${base}`);
   const inter = new Intermediates(interDir);
 
+  // Cache invalidation: tie cached artifacts to the input's identity AND the
+  // output-affecting config. If either changed (e.g. a different file reusing the
+  // same intermediates dir, the same path with new content, or a different model /
+  // instructions), the cache is stale — disable it so we never serve a previous
+  // run's transcript. (mediaKey = path+size+mtime.) Correctness over speed.
+  const sourceSig = {
+    v: 1,
+    key: mediaKey(input),
+    path: input,
+    model: llmModel,
+    instructions: instructions ?? null,
+    thinkingLevel: llmThinkingLevel,
+    asr: asrProvider,
+    subSegment,
+    identify: identifySpeakers,
+  };
+  const prevSig = inter.readJSON<typeof sourceSig>("source.json");
+  const effectiveCache = cache && !!prevSig && JSON.stringify(prevSig) === JSON.stringify(sourceSig);
+  if (cache && !effectiveCache && prevSig) {
+    progress("probe", "Input/config changed — ignoring stale cache");
+  }
+  inter.writeJSON("source.json", sourceSig);
+
   // 1. Probe -------------------------------------------------------------
   progress("probe", `Probing ${basename(input)}`);
-  const info = await inter.cachedJSON("media-info.json", cache, () => probeMedia(input));
+  const info = await inter.cachedJSON("media-info.json", effectiveCache, () => probeMedia(input));
   const isVideo = info.hasVideo && VIDEO_EXT.has(extname(input).toLowerCase());
   // Never attempt video work without an actual video stream (e.g. audio .m4a, even
   // if the caller/CLI passed useVideo: true).
@@ -122,7 +145,7 @@ export async function transcribe(
   // 2. Preprocess audio --------------------------------------------------
   progress("preprocess", "Extracting 16k mono audio");
   const audioPath = inter.path("audio.mp3");
-  if (!cache || !existsSync(audioPath)) {
+  if (!effectiveCache || !existsSync(audioPath)) {
     await extractAudio(input, audioPath, { sampleRate: 16000, channels: 1 });
   }
 
@@ -132,7 +155,7 @@ export async function transcribe(
     progress("preprocess", `Extracting ${keyframeCount} keyframes`);
     const kfDir = inter.path("keyframes");
     try {
-      if (!cache || !existsSync(kfDir)) {
+      if (!effectiveCache || !existsSync(kfDir)) {
         keyframePaths = await extractKeyframes(input, kfDir, {
           count: keyframeCount,
           durationSeconds: info.durationSeconds,
@@ -157,7 +180,7 @@ export async function transcribe(
   let asr: AsrResult | undefined;
   if (asrProvider === "assemblyai") {
     progress("asr", "Transcribing for word-level timing (AssemblyAI)");
-    asr = await inter.cachedJSON<AsrResult>("asr.json", cache, async () =>
+    asr = await inter.cachedJSON<AsrResult>("asr.json", effectiveCache, async () =>
       stage("asr", async () => {
       const { asr: r } = await transcribeWithAssemblyAI(audioPath, {
         apiKey: apiKeys?.assemblyai,
@@ -197,12 +220,12 @@ export async function transcribe(
     diarizeChunk: ({ chunk, chunked, prompt }) => {
       const rawName = chunked ? `diarize_chunk_${chunk.index}.txt` : "diarize.txt";
       const label = chunked ? `diarize-chunk-${chunk.index}` : "diarize";
-      return inter.cachedText(rawName, cache, () =>
+      return inter.cachedText(rawName, effectiveCache, () =>
         stage(label, async () => {
           let chunkAudio = audioPath;
           if (chunked) {
             chunkAudio = inter.path(`audio_chunk_${chunk.index}.mp3`);
-            if (!cache || !existsSync(chunkAudio)) {
+            if (!effectiveCache || !existsSync(chunkAudio)) {
               await extractAudio(audioPath, chunkAudio, { sampleRate: 16000, channels: 1, startSeconds: chunk.startSeconds, durationSeconds: chunk.endSeconds - chunk.startSeconds });
             }
           }
@@ -240,7 +263,7 @@ export async function transcribe(
     progress("identify", "Resolving speaker identities");
     try {
       const voiceHint = Object.keys(voiceDist).length ? voiceDist : undefined;
-      const ident = await inter.cachedJSON("identify.json", cache, () =>
+      const ident = await inter.cachedJSON("identify.json", effectiveCache, () =>
         identifySpeakersLLM(gemini, turns, { instructions, llmModel, asrSpeakerByLabel: voiceHint })
       );
       resolvedNames = ident.resolvedNames;
