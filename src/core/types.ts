@@ -89,6 +89,8 @@ export interface SpeakerInfo {
   segmentCount?: number;
   /** Total speaking time in seconds. */
   talkTime?: number;
+  /** ASR voice cluster(s) this speaker maps to (voice-anchored evidence for identify). */
+  asrVoices?: string[];
 }
 
 export interface TranscriptMetadata {
