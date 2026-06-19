@@ -277,3 +277,21 @@ User ran the BUILT `node dist/cli.js` on real files; found:
 **META-LESSON (the shared root cause of 1-3): I validated each mechanism on ONE config and generalized** (audio-through-CLI, non-flash models, missing output dir = untested second paths). Encoded the model×thinking matrix + edge cases in tests (34 green). And: ALWAYS rebuild dist when fixing — the user runs the built artifact.
 
 Full diagnosis written to `docs/review-1/review-fixes.md` (notes + error + dy/dx + fix per item).
+
+---
+
+## 2026-06-19 — Entry 9: Review-2 (code-read review) fixes
+
+Mostly "explain", some "fix". Fixes:
+- **rename** `aliases`→`resolvedNames` (it's identity resolution, not aliasing).
+- **LLM call logging**: `GeminiClient`/`GeminiFetchClient` get an `onCall` hook (label+prompt+response+usage); pipeline writes every call to `intermediates/<name>/llm/NN-<label>.{prompt,response,meta}` (toggle `logLlm`) + exposes `onLlmCall`. Save `diarize.parsed.json` next to raw `diarize.txt` (raw→parsed visible). `Intermediates.writeText/JSON` now mkdir parent dirs (for `llm/`).
+- **identify JSON mode**: `responseSchema` (IDENTIFY_SCHEMA) so output is constrained valid JSON; lenient parser kept as fallback. (Diarization stays text — long output truncates badly as JSON; that's the ipgu lesson.)
+- **AbortSignal**: `signal?` on both pipelines; cooperative cancel at stage/chunk boundaries (verified aborted-signal throws AbortError pre-work).
+- **stage-tagged errors**: `stage(name, fn)` wrapper → `[asr] Unable to connect…` instead of bare msg (cause preserved). Motivated by a live transient AssemblyAI DNS blip during the review (HTTP 000 / "could not resolve host"; Gemini fine; recovered later).
+- **formatter validity**: hardened `toSRT` (collapse blank lines inside cue text — they'd split one cue into many; clamp end≥start). +6 property tests over an adversarial transcript. **This found a real latent SRT-corruption bug.**
+- **browser worker**: blobify `classWorkerURL` (+core+wasm) via toBlobURL — fixes cross-origin "Workers can't be accessed from here".
+- **align docs**: expanded NW docstring (link + recurrence/traceback walkthrough).
+
+Explanations (now also in `docs/review-2/review-fixes.md` + code comments): words(flat, alignment substrate) vs utterances(grouped, prompt/display); `AsrUtterance.words?` optional because alignment uses top-level words; generics only where they pay (cache); tone = pass-through regex group; buildVoiceHint = count→% voice-anchor for identify; intermediates folder = resume/debug cache, NOT in-run state (data IS passed in memory within a run).
+
+40 tests green; tsc strict clean; dist rebuilt (verified). Repo hygiene: confirmed no media/dist/node_modules tracked.
