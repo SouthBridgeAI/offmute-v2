@@ -16,9 +16,10 @@ branches with **independent histories**:
 
 npm versions must be unique per publish, so the two lines never collide:
 
-- **glm** uses normal semver and owns `latest`: `1.0.0`, `1.0.1`, …
-- **opus** uses an `-opus.N` prerelease so it can never accidentally become `latest`:
-  `1.0.0-opus.0`, `1.0.0-opus.1`, … Bump the prerelease counter per opus publish.
+- **glm** uses normal semver and owns `latest` (still alpha): `0.0.1`, `0.0.2`, …
+- **opus** uses an `-opus.N` prerelease so it can never accidentally become `latest`
+  (and so the workflow can detect it by the `-opus` tag): `0.0.1-opus.0`, `0.0.1-opus.1`, …
+  Bump the prerelease counter per opus publish.
 
 ## How publishing works (npm Trusted Publishing / OIDC)
 
@@ -64,7 +65,7 @@ trusted workflow is the only automated path.
 
 ### Every release after that
 
-1. Bump the version on the branch (`glm`: `1.0.1`; `opus`: `1.0.0-opus.1`), commit, push.
+1. Bump the version on the branch (`glm`: `0.0.2`; `opus`: `0.0.1-opus.1`), commit, push.
 2. Create a **GitHub Release** whose tag points at that commit.
 3. `publish.yml` runs and publishes with the right dist-tag + provenance.
 
@@ -72,7 +73,7 @@ trusted workflow is the only automated path.
 
 ```bash
 npm dist-tag ls offmute-v2
-# expect e.g.: latest -> 1.0.0   glm -> 1.0.0   opus -> 1.0.0-opus.0
+# expect e.g.: latest -> 0.0.1   glm -> 0.0.1   opus -> 0.0.1-opus.0
 npx offmute-v2@glm --help
 npx offmute-v2@opus --help
 ```
