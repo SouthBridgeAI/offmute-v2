@@ -4,6 +4,18 @@
   "description": "Best-in-class diarized meeting transcription with multimodal LLMs + timestamped alignment.",
   "author": "Southbridge",
   "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/SouthBridgeAI/offmute-v2.git"
+  },
+  "homepage": "https://github.com/SouthBridgeAI/offmute-v2#readme",
+  "bugs": {
+    "url": "https://github.com/SouthBridgeAI/offmute-v2/issues"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
   "type": "module",
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",
