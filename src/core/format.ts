@@ -15,6 +15,11 @@ export interface SrtOptions {
   includeTone?: boolean;
 }
 
+/** Make text safe for one SRT cue: collapse blank lines (they separate cues) + trim. */
+export function srtCueText(s: string): string {
+  return s.replace(/\r\n?/g, "\n").replace(/\n[ \t]*\n+/g, "\n").trim() || " ";
+}
+
 export function toSRT(transcript: Transcript, options: SrtOptions = {}): string {
   const { includeSpeaker = true, includeTone = false } = options;
   const labels = speakerLabelMap(transcript);
@@ -22,7 +27,9 @@ export function toSRT(transcript: Transcript, options: SrtOptions = {}): string 
     const label = labels.get(seg.speakerId) ?? seg.speakerId;
     const prefix = includeSpeaker ? `${label}: ` : "";
     const tone = includeTone && seg.tone ? `(${seg.tone}) ` : "";
-    return `${i + 1}\n${formatSrtTiming(seg.start, seg.end)}\n${prefix}${tone}${seg.text}`;
+    const body = srtCueText(`${prefix}${tone}${seg.text}`);
+    // clamp so the end is never before the start (defensive — keeps the cue valid)
+    return `${i + 1}\n${formatSrtTiming(seg.start, Math.max(seg.start, seg.end))}\n${body}`;
   });
   return blocks.join("\n\n") + "\n";
 }

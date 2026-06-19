@@ -62,10 +62,16 @@
         if (ffmpeg) return ffmpeg;
         log("Loading ffmpeg.wasm…");
         ffmpeg = new FFmpeg();
-        const base = "https://esm.sh/@ffmpeg/core@0.12.10/dist/esm";
+        // @ffmpeg/ffmpeg spawns a Web Worker. Loaded from a CDN, that worker URL is
+        // cross-origin and the browser blocks it ("Workers can't be accessed from
+        // here"). The fix is to fetch the worker + core + wasm and hand ffmpeg
+        // *blob:* URLs (same-origin), via toBlobURL — including `classWorkerURL`.
+        const ffBase = "https://unpkg.com/@ffmpeg/ffmpeg@0.12.10/dist/esm";
+        const coreBase = "https://unpkg.com/@ffmpeg/core@0.12.10/dist/esm";
         await ffmpeg.load({
-          coreURL: await toBlobURL(`${base}/ffmpeg-core.js`, "text/javascript"),
-          wasmURL: await toBlobURL(`${base}/ffmpeg-core.wasm`, "application/wasm"),
+          classWorkerURL: await toBlobURL(`${ffBase}/worker.js`, "text/javascript"),
+          coreURL: await toBlobURL(`${coreBase}/ffmpeg-core.js`, "text/javascript"),
+          wasmURL: await toBlobURL(`${coreBase}/ffmpeg-core.wasm`, "application/wasm"),
         });
         return ffmpeg;
       }

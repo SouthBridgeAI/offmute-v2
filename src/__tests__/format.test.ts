@@ -1,7 +1,9 @@
 import { test, expect, describe } from "bun:test";
 import { toSRT, toMarkdown, toText } from "../core/format.js";
 import { buildTranscript, alignTurnsToSegments } from "../core/assemble.js";
-import type { Transcript, TranscriptMetadata } from "../types.js";
+import { parseSrt } from "../core/srt.js";
+import { srtTimeToSeconds } from "../core/time.js";
+import type { Transcript, TranscriptMetadata, TranscriptSegment } from "../types.js";
 
 const META: TranscriptMetadata = {
   source: "x",
@@ -53,6 +55,74 @@ describe("toText", () => {
     expect(txt).toContain("[0:04] Audience: Good.");
   });
 });
+
+// --- behavioral / property tests: formatters must ALWAYS produce valid output ---
+const TIMING_LINE = /^\d{2}:\d{2}:\d{2},\d{3} --> \d{2}:\d{2}:\d{2},\d{3}$/;
+
+function mkTranscript(segs: Array<Partial<TranscriptSegment> & { text: string; start: number; end: number }>): Transcript {
+  return {
+    speakers: [{ id: "s", label: "Spk", named: false }],
+    segments: segs.map((s, i) => ({ id: i + 1, speakerId: "s", timingSource: "asr", ...s })),
+    metadata: META,
+  };
+}
+
+// adversarial cases: empty text, blank lines, unicode, colon, end<start, zero-dur, huge
+const NASTY = mkTranscript([
+  { start: 0, end: 1, text: "normal line" },
+  { start: 1, end: 2, text: "" }, // empty
+  { start: 2, end: 3, text: "line one\n\nline three with a blank line between" }, // blank line would break SRT
+  { start: 3, end: 4, text: "emoji 😀 and únïcode and a : colon" },
+  { start: 5, end: 4.5, text: "end before start (should clamp)" }, // end < start
+  { start: 6, end: 6, text: "zero duration" },
+  { start: 7, end: 8, text: "  surrounded by whitespace  \n" },
+]);
+
+describe("toSRT is always valid", () => {
+  test("every cue has a valid timing line and parses back to the same count", () => {
+    const srt = toSRT(NASTY);
+    const cues = parseSrt(srt);
+    expect(cues.length).toBe(NASTY.segments.length); // no cue lost to a stray blank line
+    // each block's timing line matches the strict SRT format
+    const blocks = srt.trim().split(/\n\s*\n/);
+    for (const b of blocks) {
+      const lines = b.split("\n");
+      expect(Number.isInteger(Number(lines[0]))).toBe(true); // sequential index
+      expect(TIMING_LINE.test(lines[1]!)).toBe(true);
+      expect(lines.slice(2).join("").length).toBeGreaterThan(0); // non-empty body
+    }
+  });
+  test("timings are finite, non-negative, and end >= start (clamped)", () => {
+    for (const c of parseSrt(toSRT(NASTY))) {
+      expect(Number.isFinite(c.start)).toBe(true);
+      expect(c.start).toBeGreaterThanOrEqual(0);
+      expect(c.end).toBeGreaterThanOrEqual(c.start);
+    }
+  });
+  test("indices are sequential 1..N", () => {
+    const idx = toSRT(NASTY).trim().split(/\n\s*\n/).map((b) => Number(b.split("\n")[0]));
+    expect(idx).toEqual(NASTY.segments.map((_, i) => i + 1));
+  });
+  test("empty transcript yields parseable (empty) output", () => {
+    expect(parseSrt(toSRT(mkTranscript([]))).length).toBe(0);
+  });
+});
+
+describe("toMarkdown is always structured", () => {
+  test("has speakers + transcript sections and renders all cues", () => {
+    const md = toMarkdown(NASTY);
+    expect(md).toContain("## Speakers");
+    expect(md).toContain("## Transcript");
+    expect(md).toContain("normal line");
+    expect(md.length).toBeGreaterThan(0);
+  });
+  test("empty transcript still produces valid markdown", () => {
+    const md = toMarkdown(mkTranscript([]));
+    expect(md).toContain("## Transcript");
+  });
+});
+
+void srtTimeToSeconds;
 
 describe("assemble round-trip", () => {
   test("alignTurnsToSegments + buildTranscript with no ASR uses approx times", () => {

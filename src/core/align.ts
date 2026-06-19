@@ -32,16 +32,28 @@ export interface AlignPair {
 }
 
 /**
- * Global sequence alignment (Needleman–Wunsch) on normalized tokens — the textbook
- * O(n·m) DP: initialise the first row/column with cumulative gap penalties, fill
- * each cell with max(diag ± match/mismatch, up − gap, left − gap), then trace back
- * from (n,m) to (0,0). Returns the alignment path as a list of pairs.
+ * Global sequence alignment (Needleman–Wunsch) of two token sequences `a` (LLM
+ * tokens) and `b` (ASR words). Returns the alignment path: a list of pairs that
+ * each consume one token from `a` (a diagonal/up move) and/or one from `b`
+ * (diagonal/left), so reading the pairs in order reconstructs how the two
+ * sequences line up. Reference: https://en.wikipedia.org/wiki/Needleman–Wunsch_algorithm
  *
- * Score/backpointer matrices are flat Int32Array/Uint8Array (compact, ~5 bytes per
- * cell) but it is still full O(n·m) memory — there is NO banding/Hirschberg here.
- * That is fine per chunk (a few thousand tokens each); whole-file alignment is done
- * per chunk to keep n·m bounded. (If single-shot alignment of very long inputs is
- * ever needed, add a banded or Hirschberg variant.)
+ * How it works (textbook NW, O(n·m) time and space):
+ *  1. `score[i][j]` = best alignment score of a[0..i) against b[0..j). The first
+ *     row/column are seeded with cumulative gap penalties (aligning a prefix to
+ *     nothing costs one gap per token).
+ *  2. Fill each cell as the best of three moves:
+ *       diagonal  = score[i-1][j-1] + (a[i-1]==b[j-1] ? MATCH : MISMATCH)  // consume both
+ *       up        = score[i-1][j]   + GAP                                  // consume a[i-1], skip b
+ *       left      = score[i][j-1]   + GAP                                  // consume b[j-1], skip a
+ *     `back[i][j]` remembers which move won (0=diag, 1=up, 2=left); ties prefer diag.
+ *  3. Trace `back` from the bottom-right (n,m) to (0,0) and reverse to get the path.
+ *
+ * Matrices are flat Int32Array/Uint8Array (compact, ~5 bytes/cell) but this is
+ * still full O(n·m) memory — there is NO banding/Hirschberg here. That is fine per
+ * chunk (a few thousand tokens ⇒ tens of MB); whole-file alignment is done per
+ * chunk to keep n·m bounded. (Add a banded/Hirschberg variant only if single-shot
+ * alignment of very long inputs is ever needed.)
  */
 export function alignTokens(a: string[], b: string[]): AlignPair[] {
   const n = a.length;
