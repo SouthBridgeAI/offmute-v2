@@ -19,7 +19,7 @@ import {
   type ApiKeys,
 } from "./config.js";
 import { logger } from "../utils/logger.js";
-import type { Segment, TranscriptMetadata, TranscriptResult, TimestampedWord, TimestampedUtterance } from "./types.js";
+import type { Segment, TranscriptMetadata, TranscriptResult, TimestampedWord, TimestampedUtterance, ChunkPlan } from "./types.js";
 import {
   checkFfmpeg,
   probe,
@@ -35,7 +35,7 @@ import { AssemblyAIProvider } from "../providers/assemblyai.js";
 import { WhisperGroqClient } from "../providers/whisper-groq.js";
 import { setLlmLogPath } from "../providers/llm-log.js";
 import { describeMeeting, type MeetingDescription } from "../transcribe/describe.js";
-import { transcribeChunk, type ParsedLlmSegment, type ChunkTranscriptionResult } from "../transcribe/llm-transcribe.js";
+import { transcribeChunk, partitionByOwnership, type ParsedLlmSegment, type ChunkTranscriptionResult } from "../transcribe/llm-transcribe.js";
 import { alignSegments, type AlignedSegment } from "../align/aligner.js";
 import { fillAsrGaps } from "../align/fill-gaps.js";
 import { assignGlobalSpeakers } from "../diarize/consistency.js";
@@ -175,10 +175,12 @@ export async function transcribe(opts: PipelineOptions): Promise<TranscriptResul
   }
 
   // ---------- 3. LLM-TRANSCRIBE (per chunk, concurrent) ----------
-  let llmChunkResults: ChunkTranscriptionResult[] = [];
-  if (has(passes, "llm-transcribe")) {
-    logger.info("=== llm-transcribe ===");
-    // Silence-aware chunk planning.
+  // The chunk plan is needed both for transcription and for ownership partitioning (below),
+  // so compute it whenever we'll have LLM segments to process.
+  const needChunks =
+    has(passes, "llm-transcribe") || has(passes, "align") || has(passes, "consistency");
+  let chunks: ChunkPlan[] = [];
+  if (needChunks) {
     let silences: { start: number; end: number; duration: number }[] = [];
     try {
       silences = await detectSilence(audioPath, { noiseDb: -15, minDuration: 0.3 });
@@ -186,26 +188,40 @@ export async function transcribe(opts: PipelineOptions): Promise<TranscriptResul
     } catch {
       /* ignore */
     }
-    let chunks = planChunks(duration, options.chunkDurationSec, options.chunkOverlapSec);
+    chunks = planChunks(duration, options.chunkDurationSec, options.chunkOverlapSec);
     if (silences.length > 3) {
       chunks = chunks.map((c) => {
         const snapped = snapToSilence(c.start, silences, Math.min(10, options.chunkOverlapSec / 2));
-        return { ...c, start: snapped };
+        // trustedStart must follow the snapped start so ownership partitioning is correct.
+        return { ...c, start: snapped, trustedStart: snapped + c.overlapWithPrevious };
       });
     }
-    if (options.onlyChunk !== undefined) chunks = chunks.filter((c) => c.index === options.onlyChunk);
-    logger.info(`${chunks.length} chunks (${options.chunkDurationSec}s, ${options.chunkOverlapSec}s overlap)`);
+  }
+
+  // Tag every LLM segment with its source chunk's index + trustedStart (for ownership
+  // partitioning below).
+  const tagWith = (r: ChunkTranscriptionResult, chunk: ChunkPlan): ChunkTranscriptionResult => ({
+    ...r,
+    segments: r.segments.map((s) => ({ ...s, chunkIndex: chunk.index, trustedStart: chunk.trustedStart })),
+  });
+
+  let llmChunkResults: ChunkTranscriptionResult[] = [];
+  if (has(passes, "llm-transcribe")) {
+    logger.info("=== llm-transcribe ===");
+    let runChunks = chunks;
+    if (options.onlyChunk !== undefined) runChunks = chunks.filter((c) => c.index === options.onlyChunk);
+    logger.info(`${runChunks.length} chunks (${options.chunkDurationSec}s, ${options.chunkOverlapSec}s overlap)`);
 
     const client = new GeminiClient(keys.gemini!);
     const llmDir = `${options.intermediatesDir}/llm`;
     mkdirSync(llmDir, { recursive: true });
 
-    llmChunkResults = await mapPool(chunks, options.concurrency, async (chunk) => {
+    llmChunkResults = await mapPool(runChunks, options.concurrency, async (chunk) => {
       const parsedPath = `${llmDir}/chunk_${String(chunk.index).padStart(2, "0")}_parsed.json`;
       const cached = forceAll ? null : readJson<ChunkTranscriptionResult>(parsedPath);
       if (cached && cached.segments.length > 0) {
         logger.info(`chunk ${chunk.index}: cached (${cached.segments.length} segments)`);
-        return cached;
+        return tagWith(cached, chunk);
       }
       const chunkPath = `${llmDir}/chunk_${String(chunk.index).padStart(2, "0")}.flac`;
       if (!existsSync(chunkPath) || forceAll) {
@@ -229,7 +245,7 @@ export async function transcribe(opts: PipelineOptions): Promise<TranscriptResul
         chunk.start,
         {
           index: chunk.index + 1,
-          total: chunks.length,
+          total: runChunks.length,
           description: description?.description,
           roster: description?.roster,
           previousTail,
@@ -239,23 +255,37 @@ export async function transcribe(opts: PipelineOptions): Promise<TranscriptResul
       );
       writeJson(parsedPath, result);
       writeFileSync(`${llmDir}/chunk_${String(chunk.index).padStart(2, "0")}_raw.json`, result.raw);
-      return result;
+      return tagWith(result, chunk);
     });
   } else {
     // Load all chunk results from disk (only if caches are valid for this input).
     const llmDir = `${options.intermediatesDir}/llm`;
     if (!forceAll && existsSync(llmDir)) {
-      const files = await import("node:fs/promises").then((m) => m.readdir(llmDir));
-      llmChunkResults = files
+      const files = (await import("node:fs/promises").then((m) => m.readdir(llmDir)))
         .filter((f) => f.endsWith("_parsed.json"))
-        .sort()
-        .map((f) => readJson<ChunkTranscriptionResult>(`${llmDir}/${f}`)!)
-        .filter(Boolean);
+        .sort();
+      llmChunkResults = files
+        .map((f, i) => {
+          const r = readJson<ChunkTranscriptionResult>(`${llmDir}/${f}`);
+          return r && chunks[i] ? tagWith(r, chunks[i]!) : r;
+        })
+        .filter(Boolean) as ChunkTranscriptionResult[];
     }
   }
 
-  // Gather all LLM segments (absolute times already applied).
-  const allLlmSegments: ParsedLlmSegment[] = llmChunkResults.flatMap((r) => r.segments);
+  // Gather all LLM segments (absolute times already applied), then partition by chunk
+  // ownership: drop segments whose center time falls in the overlap region owned by the
+  // PREVIOUS chunk. This structurally guarantees every word is emitted by exactly one chunk
+  // (no overlap double-printing) — the fix for the WER-inflating dedup bug — which the
+  // fuzzy dedup in finalize can miss (e.g. when overlap duplicates map to different speakers).
+  let allLlmSegments: ParsedLlmSegment[] = llmChunkResults.flatMap((r) => r.segments);
+  const beforePart = allLlmSegments.length;
+  allLlmSegments = partitionByOwnership(allLlmSegments);
+  if (beforePart !== allLlmSegments.length) {
+    logger.info(
+      `ownership-partition: ${beforePart} -> ${allLlmSegments.length} (dropped ${beforePart - allLlmSegments.length} overlap duplicates)`,
+    );
+  }
   logger.info(`total LLM segments: ${allLlmSegments.length}`);
 
   // ---------- 4. TIMESTAMPED ----------

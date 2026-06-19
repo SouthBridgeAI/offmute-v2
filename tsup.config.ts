@@ -22,5 +22,7 @@ export default defineConfig([
     // Browser build: no node polyfills; fetch/btoa are native.
     env: { NODE_ENV: "production" },
     outExtension: () => ({ js: ".browser.js" }),
+    // ffmpeg.wasm peer deps are dynamically imported in-browser; keep them external.
+    external: ["@ffmpeg/ffmpeg", "@ffmpeg/util"],
   },
 ]);

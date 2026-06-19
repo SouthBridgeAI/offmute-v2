@@ -93,6 +93,7 @@ export function assignGlobalSpeakers(
   const asrToGroup: Record<string, string> = {};
   const groupLabel: Record<string, string> = {};
   const groupTalk: Record<string, number> = {}; // group → total talk DURATION
+  const groupAsrVoices: Record<string, string[]> = {}; // group → ASR voice cluster ids
   for (const asrSp of Object.keys(labelVotes)) {
     const label = dominantLabel[asrSp] ?? asrSp;
     let groupId: string | undefined;
@@ -106,6 +107,7 @@ export function assignGlobalSpeakers(
     }
     asrToGroup[asrSp] = groupId;
     groupTalk[groupId] = (groupTalk[groupId] ?? 0) + (asrDuration[asrSp] ?? 0);
+    (groupAsrVoices[groupId] ??= []).push(asrSp);
   }
 
   // Assign global ids "Speaker A", "Speaker B", … by talk time (desc).
@@ -144,12 +146,19 @@ export function assignGlobalSpeakers(
     speakerMap[s.speaker]!.count++;
     speakerMap[s.speaker]!.talk += s.end - s.start;
   }
+  // global id → ASR voice clusters (voice-anchored evidence for identify).
+  const globalAsrVoices: Record<string, string[]> = {};
+  for (const [g, voices] of Object.entries(groupAsrVoices)) {
+    globalAsrVoices[groupToGlobal[g]!] = voices;
+  }
+
   const speakers: SpeakerInfo[] = Object.entries(speakerMap)
     .map(([id, v]) => ({
       id,
       name: displayNames[id],
       segmentCount: v.count,
       talkTime: v.talk,
+      asrVoices: globalAsrVoices[id],
     }))
     .filter((s) => s.talkTime > 0) // drop zero-duration artifacts
     .sort((a, b) => (b.talkTime ?? 0) - (a.talkTime ?? 0));

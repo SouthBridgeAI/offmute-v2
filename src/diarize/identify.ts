@@ -36,7 +36,10 @@ function buildTranscriptExcerpt(segments: IdentifySegment[], speakers: SpeakerIn
     const segs = (bySpeaker[sp.id] || [])
       .sort((a, b) => b.text.length - a.text.length)
       .slice(0, 6);
-    parts.push(`### ${sp.id} (${sp.name || "unknown"}, ${sp.segmentCount || 0} turns, ~${Math.round(sp.talkTime || 0)}s)`);
+    const voices = sp.asrVoices && sp.asrVoices.length ? `, voices=${sp.asrVoices.join("/")}` : "";
+    parts.push(
+      `### ${sp.id} (${sp.name || "unknown"}, ${sp.segmentCount || 0} turns, ~${Math.round(sp.talkTime || 0)}s${voices})`,
+    );
     for (const s of segs) parts.push(`  ${s.text}`);
   }
   return parts.join("\n");
