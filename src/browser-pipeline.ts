@@ -4,15 +4,14 @@
  * merge → identify → format), including chunking for long media. Runs entirely in
  * the browser; keys are injected by the host.
  */
-import type { AsrResult, LlmCallRecord, LlmLine, Transcript } from "./types.js";
+import type { AsrResult, LlmCallRecord, Transcript } from "./types.js";
 import type { FFmpegLike } from "./media/ffmpeg-wasm.js";
 import { extractAudioWasm, extractKeyframesWasm, writeInput } from "./media/ffmpeg-wasm.js";
 import { transcribeWithAssemblyAIFetch } from "./providers/assemblyai-fetch.js";
 import { GeminiFetchClient } from "./providers/gemini-fetch.js";
-import { buildAsrHint, buildDiarizationPrompt, DIARIZATION_SYSTEM } from "./core/prompts.js";
-import { parseDiarizedText } from "./core/parse-diarized.js";
-import { alignTurnsToSegments, buildTranscript, type PlainSegment } from "./core/assemble.js";
-import { calculateChunks, chunkOwnership, mergeChunkSegments, type MergeableSegment } from "./core/chunk.js";
+import { DIARIZATION_SYSTEM } from "./core/prompts.js";
+import { buildTranscript } from "./core/assemble.js";
+import { orchestrateChunks } from "./core/orchestrate.js";
 import { identifySpeakersLLM, type TextGenerator } from "./core/identify.js";
 import { toJSON, toMarkdown, toSRT } from "./core/format.js";
 import { secondsToCompact } from "./core/time.js";
@@ -51,21 +50,6 @@ export interface BrowserTranscribeResult {
   markdown: string;
   json: string;
   asr: AsrResult;
-}
-
-function sliceAsrWindow(asr: AsrResult, start: number, end: number, relative: boolean): AsrResult {
-  const off = relative ? start : 0;
-  const utterances = asr.utterances
-    .filter((u) => u.end >= start && u.start <= end)
-    .map((u) => ({ ...u, start: u.start - off, end: u.end - off }));
-  return { ...asr, utterances, words: [] };
-}
-
-function mergeVoiceDist(target: Record<string, Record<string, number>>, source: Record<string, Record<string, number>>): void {
-  for (const [label, counts] of Object.entries(source)) {
-    target[label] ??= {};
-    for (const [sp, n] of Object.entries(counts)) target[label]![sp] = (target[label]![sp] ?? 0) + n;
-  }
 }
 
 export async function transcribeInBrowser(
@@ -112,76 +96,37 @@ export async function transcribeInBrowser(
     }
   }
 
-  // 4-5. diarize (single-pass or chunked) + align
+  // 4-5-6. diarize + align + merge — shared orchestrator (same as Node) -----
   const gem = new GeminiFetchClient(apiKeys.gemini);
   if (options.onLlmCall) gem.onCall = options.onLlmCall;
-  const checkAbort = () => options.signal?.throwIfAborted();
-  const maxSingleSec = (options.maxSinglePassMinutes ?? 35) * 60;
-  const chunkSec = (options.chunkMinutes ?? 15) * 60;
-  const overlapSec = (options.chunkOverlapMinutes ?? 2) * 60;
-  const timeChunks = duration <= maxSingleSec ? [{ index: 0, startSeconds: 0, endSeconds: duration }] : calculateChunks(duration, chunkSec, overlapSec);
-  const chunked = timeChunks.length > 1;
 
-  const allTurns: LlmLine[] = [];
-  const mergeable: MergeableSegment[] = [];
-  const voiceDist: Record<string, Record<string, number>> = {};
-  const ownership = chunked ? chunkOwnership(timeChunks, duration) : null;
-  let previousTail = "";
-
-  for (const ch of timeChunks) {
-    checkAbort();
-    progress("diarize", chunked ? `Diarizing chunk ${ch.index + 1}/${timeChunks.length}` : `Diarizing with ${llmModel}`);
-    const audioBytes = chunked
-      ? await extractAudioWasm(ffmpeg, null, { inputName: fullAudioName, startSeconds: ch.startSeconds, durationSeconds: ch.endSeconds - ch.startSeconds, keepInput: true })
-      : fullAudio;
-
-    const windowHint = asr.diarized ? buildAsrHint(sliceAsrWindow(asr, ch.startSeconds, ch.endSeconds, chunked)) : undefined;
-    const prompt = buildDiarizationPrompt({
-      instructions,
-      asrHint: windowHint,
-      chunk: chunked ? { index: ch.index, total: timeChunks.length, startSeconds: ch.startSeconds } : undefined,
-      previousTail: chunked ? previousTail : undefined,
-    });
-
-    const res = await gem.generate(
-      [
-        { data: { bytes: audioBytes, mimeType: "audio/mp3", displayName: `chunk_${ch.index}` } },
-        ...keyframes.map((kf) => ({ data: { bytes: kf, mimeType: "image/jpeg" } })),
-        { text: prompt },
-      ],
-      { model: llmModel, temperature: 0.2, maxOutputTokens: 65536, thinkingLevel: llmThinkingLevel, systemInstruction: DIARIZATION_SYSTEM, label: chunked ? `diarize-chunk-${ch.index}` : "diarize" }
-    );
-    if (!res.text.trim()) throw new Error(`Diarization returned empty text${chunked ? ` (chunk ${ch.index})` : ""}`);
-
-    const turns = parseDiarizedText(res.text);
-    previousTail = turns.slice(-3).map((t) => `${t.speaker}: ${t.text}`).join("\n");
-    if (chunked) for (const t of turns) if (t.approxStart !== undefined) t.approxStart += ch.startSeconds;
-    allTurns.push(...turns);
-
-    const windowWords = chunked ? asr.words.filter((w) => w.start >= ch.startSeconds - 2 && w.start <= ch.endSeconds + 2) : asr.words;
-    const { segments, voiceDist: vd } = alignTurnsToSegments(turns, windowWords, duration, subSegment);
-    mergeVoiceDist(voiceDist, vd);
-    const own = ownership?.[ch.index];
-    for (const s of segments) {
-      if (own) {
-        const center = (s.start + s.end) / 2;
-        if (center < own.start || center >= own.end) continue;
-      }
-      mergeable.push({ ...s, chunkIndex: ch.index });
-    }
-  }
-
-  if (allTurns.length === 0) throw new Error("No diarized turns parsed from LLM output");
-
-  // 6. merge overlaps
-  const merged: PlainSegment[] = (chunked ? mergeChunkSegments(mergeable, timeChunks) : mergeable).map((m) => ({
-    start: m.start,
-    end: m.end,
-    speakerLabel: m.speakerLabel,
-    tone: m.tone,
-    text: m.text,
-    matchRatio: m.matchRatio,
-  }));
+  const { segments: merged, allTurns, voiceDist } = await orchestrateChunks({
+    asr,
+    durationSeconds: duration,
+    instructions,
+    subSegment,
+    maxSinglePassSeconds: (options.maxSinglePassMinutes ?? 35) * 60,
+    chunkSeconds: (options.chunkMinutes ?? 15) * 60,
+    overlapSeconds: (options.chunkOverlapMinutes ?? 2) * 60,
+    signal: options.signal,
+    onProgress: (msg) => progress("diarize", msg),
+    // browser-specific: slice the chunk's audio with ffmpeg.wasm, call Gemini over fetch.
+    diarizeChunk: async ({ chunk, chunked, prompt }) => {
+      const audioBytes = chunked
+        ? await extractAudioWasm(ffmpeg, null, { inputName: fullAudioName, startSeconds: chunk.startSeconds, durationSeconds: chunk.endSeconds - chunk.startSeconds, keepInput: true })
+        : fullAudio;
+      const res = await gem.generate(
+        [
+          { data: { bytes: audioBytes, mimeType: "audio/mp3", displayName: `chunk_${chunk.index}` } },
+          ...keyframes.map((kf) => ({ data: { bytes: kf, mimeType: "image/jpeg" } })),
+          { text: prompt },
+        ],
+        { model: llmModel, temperature: 0.2, maxOutputTokens: 65536, thinkingLevel: llmThinkingLevel, systemInstruction: DIARIZATION_SYSTEM, label: chunked ? `diarize-chunk-${chunk.index}` : "diarize" }
+      );
+      if (!res.text.trim()) throw new Error(`Diarization returned empty text${chunked ? ` (chunk ${chunk.index})` : ""}`);
+      return res.text;
+    },
+  });
 
   // 7. identify
   let resolvedNames: Record<string, string> | undefined;

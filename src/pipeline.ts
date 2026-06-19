@@ -4,14 +4,14 @@
  */
 import { basename, dirname, extname, join } from "node:path";
 import { existsSync } from "node:fs";
-import type { AsrResult, LlmCallRecord, LlmLine, Transcript } from "./types.js";
+import type { AsrResult, LlmCallRecord, Transcript } from "./types.js";
 import { probeMedia, extractAudio, extractKeyframes } from "./media/ffmpeg.js";
 import { transcribeWithAssemblyAI } from "./providers/assemblyai.js";
 import { GeminiClient } from "./providers/gemini.js";
-import { buildAsrHint, buildDiarizationPrompt, DIARIZATION_SYSTEM } from "./core/prompts.js";
-import { parseDiarizedText } from "./core/parse-diarized.js";
-import { alignTurnsToSegments, buildTranscript, type PlainSegment } from "./core/assemble.js";
-import { calculateChunks, chunkOwnership, mergeChunkSegments, type MergeableSegment } from "./core/chunk.js";
+import { DIARIZATION_SYSTEM } from "./core/prompts.js";
+import { buildTranscript } from "./core/assemble.js";
+import { orchestrateChunks } from "./core/orchestrate.js";
+import { formatSrt } from "./core/srt.js";
 import { toJSON, toMarkdown, toSRT, toText } from "./core/format.js";
 import { Intermediates } from "./node/intermediates.js";
 import { identifySpeakersLLM } from "./core/identify.js";
@@ -183,108 +183,53 @@ export async function transcribe(
       inter.writeJSON(`${stem}.meta.json`, { model: rec.model, label: rec.label, usage: rec.usage, fileParts: rec.fileParts, error: rec.error });
     }
   };
-  const maxSingleSec = (options.maxSinglePassMinutes ?? 35) * 60;
-  const chunkSec = (options.chunkMinutes ?? 15) * 60;
-  const overlapSec = (options.chunkOverlapMinutes ?? 2) * 60;
-  const timeChunks =
-    info.durationSeconds <= maxSingleSec
-      ? [{ index: 0, startSeconds: 0, endSeconds: info.durationSeconds }]
-      : calculateChunks(info.durationSeconds, chunkSec, overlapSec);
-  const chunked = timeChunks.length > 1;
-
-  const allTurns: LlmLine[] = [];
-  const mergeable: MergeableSegment[] = [];
-  const voiceDist: Record<string, Record<string, number>> = {};
-  const ownership = chunked ? chunkOwnership(timeChunks, info.durationSeconds) : null;
-  let previousTail = "";
-
-  for (const ch of timeChunks) {
-    checkAbort();
-    progress("diarize", chunked ? `Diarizing chunk ${ch.index + 1}/${timeChunks.length}` : `Diarizing with ${llmModel}`);
-
-    // chunk audio (full file for single-pass)
-    let chunkAudio = audioPath;
-    if (chunked) {
-      chunkAudio = inter.path(`audio_chunk_${ch.index}.mp3`);
-      if (!cache || !existsSync(chunkAudio)) {
-        await extractAudio(audioPath, chunkAudio, {
-          sampleRate: 16000,
-          channels: 1,
-          startSeconds: ch.startSeconds,
-          durationSeconds: ch.endSeconds - ch.startSeconds,
-        });
-      }
-    }
-
-    const windowHint = asr && asr.diarized ? buildAsrHint(sliceAsrWindow(asr, ch.startSeconds, ch.endSeconds, chunked)) : undefined;
-    const prompt = buildDiarizationPrompt({
-      instructions,
-      asrHint: windowHint,
-      chunk: chunked ? { index: ch.index, total: timeChunks.length, startSeconds: ch.startSeconds } : undefined,
-      previousTail: chunked ? previousTail : undefined,
-    });
-
-    const diarizeName = chunked ? `diarize_chunk_${ch.index}.txt` : "diarize.txt";
-    const text = await inter.cachedText(diarizeName, cache, async () => {
-      const parts = [{ filePath: chunkAudio }, ...keyframePaths.map((p) => ({ filePath: p })), { text: prompt }];
-      const stageName = chunked ? `diarize-chunk-${ch.index}` : "diarize";
-      const res = await stage(stageName, () =>
-        gemini.generate(parts, {
-          model: llmModel,
-          temperature: 0.2,
-          maxOutputTokens: 65536,
-          thinkingLevel: llmThinkingLevel,
-          systemInstruction: DIARIZATION_SYSTEM,
-          label: stageName,
+  const { segments, allTurns, voiceDist } = await orchestrateChunks({
+    asr,
+    durationSeconds: info.durationSeconds,
+    instructions,
+    subSegment,
+    maxSinglePassSeconds: (options.maxSinglePassMinutes ?? 35) * 60,
+    chunkSeconds: (options.chunkMinutes ?? 15) * 60,
+    overlapSeconds: (options.chunkOverlapMinutes ?? 2) * 60,
+    signal,
+    onProgress: (msg) => progress("diarize", msg),
+    // Node-specific: extract this chunk's audio, call Gemini, cache + log the raw text.
+    diarizeChunk: ({ chunk, chunked, prompt }) => {
+      const rawName = chunked ? `diarize_chunk_${chunk.index}.txt` : "diarize.txt";
+      const label = chunked ? `diarize-chunk-${chunk.index}` : "diarize";
+      return inter.cachedText(rawName, cache, () =>
+        stage(label, async () => {
+          let chunkAudio = audioPath;
+          if (chunked) {
+            chunkAudio = inter.path(`audio_chunk_${chunk.index}.mp3`);
+            if (!cache || !existsSync(chunkAudio)) {
+              await extractAudio(audioPath, chunkAudio, { sampleRate: 16000, channels: 1, startSeconds: chunk.startSeconds, durationSeconds: chunk.endSeconds - chunk.startSeconds });
+            }
+          }
+          const parts = [{ filePath: chunkAudio }, ...keyframePaths.map((p) => ({ filePath: p })), { text: prompt }];
+          const res = await gemini.generate(parts, {
+            model: llmModel,
+            temperature: 0.2,
+            maxOutputTokens: 65536,
+            thinkingLevel: llmThinkingLevel,
+            systemInstruction: DIARIZATION_SYSTEM,
+            label,
+          });
+          inter.writeJSON(`${rawName.replace(/\.txt$/, "")}.meta.json`, { model: res.model, usage: res.usage });
+          if (!res.text.trim()) throw new Error(`Diarization returned empty text${chunked ? ` (chunk ${chunk.index})` : ""}`);
+          return res.text;
         })
       );
-      inter.writeJSON(chunked ? `diarize_chunk_${ch.index}.meta.json` : "diarize.meta.json", { model: res.model, usage: res.usage });
-      if (!res.text.trim()) throw new Error(`Diarization returned empty text${chunked ? ` (chunk ${ch.index})` : ""}`);
-      return res.text;
-    });
-
-    const turns = parseDiarizedText(text);
-    // Save the parsed turns next to the raw output so raw→parsed is inspectable.
-    inter.writeJSON(chunked ? `diarize_chunk_${ch.index}.parsed.json` : "diarize.parsed.json", turns);
-    previousTail = turns.slice(-3).map((t) => `${t.speaker}: ${t.text}`).join("\n");
-    // The prompt asks for chunk-RELATIVE timestamps; make them absolute so the
-    // no-ASR fallback (which uses approxStart) orders turns correctly across chunks.
-    // (Alignment ignores approxStart, so the ASR path is unaffected.)
-    if (chunked) {
-      for (const t of turns) if (t.approxStart !== undefined) t.approxStart += ch.startSeconds;
-    }
-    allTurns.push(...turns);
-
-    if (asr) {
-      // align this chunk's turns to ASR words within (a small pad around) the chunk window
-      const windowWords = chunked
-        ? asr.words.filter((w) => w.start >= ch.startSeconds - 2 && w.start <= ch.endSeconds + 2)
-        : asr.words;
-      const { segments: chunkSegs, voiceDist: vd } = alignTurnsToSegments(turns, windowWords, info.durationSeconds, subSegment);
-      mergeVoiceDist(voiceDist, vd);
-      // assign each segment to exactly one chunk by center-time ownership (no overlap dup)
-      const own = ownership?.[ch.index];
-      for (const s of chunkSegs) {
-        if (own) {
-          const center = (s.start + s.end) / 2;
-          if (center < own.start || center >= own.end) continue;
-        }
-        mergeable.push({ ...s, chunkIndex: ch.index });
-      }
-    }
-  }
-
-  if (allTurns.length === 0) throw new Error("No diarized turns parsed from LLM output");
-
-  // merge overlapping chunk segments (no-op for single chunk)
-  progress("align", chunked ? "Merging chunk overlaps" : "Aligning transcript to word timings");
-  let segments: PlainSegment[];
-  if (asr) {
-    const merged = chunked ? mergeChunkSegments(mergeable, timeChunks) : mergeable;
-    segments = merged.map((m) => ({ start: m.start, end: m.end, speakerLabel: m.speakerLabel, tone: m.tone, text: m.text, matchRatio: m.matchRatio }));
-  } else {
-    segments = alignTurnsToSegments(allTurns, undefined, info.durationSeconds, subSegment).segments;
-  }
+    },
+    // Node-specific: save raw→parsed + a running partial transcript (resume/inspect).
+    onChunk: ({ index, chunked, turns, segmentsSoFar }) => {
+      inter.writeJSON(chunked ? `diarize_chunk_${index}.parsed.json` : "diarize.parsed.json", turns);
+      inter.writeText(
+        "transcript.partial.srt",
+        formatSrt(segmentsSoFar.map((s) => ({ start: s.start, end: s.end, speaker: s.speakerLabel, text: s.text })))
+      );
+    },
+  });
   const turns = allTurns;
 
   // 6. Identify / canonicalize speakers ---------------------------------
@@ -334,26 +279,3 @@ export async function transcribe(
   return { transcript, srt, markdown, json, text, intermediatesDir: interDir, asr };
 }
 
-/** Build a minimal AsrResult whose utterances fall within [start,end]. When
- * `relative`, utterance/word times are shifted to be relative to `start` so the
- * hint's timestamps match the chunk-relative timestamps we ask the LLM to emit. */
-function sliceAsrWindow(asr: AsrResult, start: number, end: number, relative: boolean): AsrResult {
-  const off = relative ? start : 0;
-  const utterances = asr.utterances
-    .filter((u) => u.end >= start && u.start <= end)
-    .map((u) => ({ ...u, start: u.start - off, end: u.end - off }));
-  return { ...asr, utterances, words: [] };
-}
-
-/** Merge per-chunk label→ASR-speaker counts into an accumulator (in place). */
-function mergeVoiceDist(
-  target: Record<string, Record<string, number>>,
-  source: Record<string, Record<string, number>>
-): void {
-  for (const [label, counts] of Object.entries(source)) {
-    target[label] ??= {};
-    for (const [sp, n] of Object.entries(counts)) {
-      target[label]![sp] = (target[label]![sp] ?? 0) + n;
-    }
-  }
-}
