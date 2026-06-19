@@ -6,7 +6,7 @@
  */
 import type { ChunkPlan } from "./types.js";
 import { createHash } from "node:crypto";
-import { basename, resolve } from "node:path";
+import { basename, dirname, resolve } from "node:path";
 import { statSync } from "node:fs";
 import { tmpdir } from "node:os";
 
@@ -34,8 +34,8 @@ export interface ModelAssignment {
 export interface PipelineOptions {
   /** Input file path. */
   input: string;
-  /** Output directory. */
-  outputDir: string;
+  /** Output directory. Defaults to the input file's own directory. */
+  outputDir?: string;
   /** Directory for intermediates (resumable). If omitted, derived per-input so
    * different files never share a cache (see deriveIntermediatesDir). */
   intermediatesDir?: string;
@@ -104,22 +104,29 @@ export const MODELS = {
   gemini25Pro: "gemini-2.5-pro",
   gemini25Flash: "gemini-2.5-flash",
   gemini3Pro: "gemini-3-pro-preview",
+  gemini31Pro: "gemini-3.1-pro-preview",
+  geminiFlashLatest: "gemini-flash-latest",
   deepseek: "deepseek-chat",
   deepseekReasoner: "deepseek-reasoner",
   gpt4o: "gpt-4o",
   claudeSonnet: "claude-sonnet-4-5",
 } as const;
 
-/** Default model for each role (used when --model/--reasoner not passed). */
-export const DEFAULT_TRANSCRIBE_MODEL = MODELS.gemini25Flash;
+/** Default model for each role (used when --model/--reasoner not passed).
+ * Gemini 3.1 Pro is the default for best diarization/tone quality; its thinking is tamed
+ * per-model (see resolveThinking) so it stays practical for transcription. Use
+ * `--model gemini-2.5-flash` / `gemini-flash-latest` for faster/cheaper runs. */
+export const DEFAULT_TRANSCRIBE_MODEL = MODELS.gemini31Pro;
 export const DEFAULT_REASONER_MODEL = MODELS.deepseek;
 
 /** Resolve API keys: injected > env. */
 export function resolveKeys(injected?: ApiKeys): ApiKeys {
   const env = process.env;
   return {
-    gemini: injected?.gemini || injected?.google || env.GEMINI_API_KEY || env.GOOGLE_API_KEY,
-    google: injected?.google || injected?.gemini || env.GOOGLE_API_KEY || env.GEMINI_API_KEY,
+    gemini:
+      injected?.gemini || injected?.google || env.GEMINI_API_KEY || env.GOOGLE_API_KEY,
+    google:
+      injected?.google || injected?.gemini || env.GOOGLE_API_KEY || env.GEMINI_API_KEY,
     openai: injected?.openai || env.OPENAI_API_KEY,
     deepseek: injected?.deepseek || env.DEEPSEEK_API_KEY,
     groq: injected?.groq || env.GROQ_API_KEY,
@@ -129,7 +136,9 @@ export function resolveKeys(injected?: ApiKeys): ApiKeys {
 }
 
 /** Default options merged with user options. */
-export function resolveOptions(opts: PipelineOptions): Required<
+export function resolveOptions(
+  opts: PipelineOptions,
+): Required<
   Omit<
     PipelineOptions,
     | "instructions"
@@ -153,7 +162,8 @@ export function resolveOptions(opts: PipelineOptions): Required<
   > {
   return {
     input: opts.input,
-    outputDir: opts.outputDir,
+    // Default: write next to the input file (e.g. meeting.md beside meeting.mp4) — no ./output folder.
+    outputDir: opts.outputDir ?? dirname(resolve(opts.input)),
     intermediatesDir: opts.intermediatesDir ?? deriveIntermediatesDir(opts.input),
     instructions: opts.instructions,
     knownSpeakers: opts.knownSpeakers,
@@ -175,7 +185,7 @@ export function resolveOptions(opts: PipelineOptions): Required<
     screenshotCount: opts.screenshotCount ?? 6,
     concurrency: opts.concurrency ?? 4,
     saveIntermediates: opts.saveIntermediates ?? true,
-    formats: opts.formats ?? ["srt", "md", "json"],
+    formats: opts.formats ?? ["md"],
     diarizationLevel: opts.diarizationLevel ?? 2,
     apiKeys: opts.apiKeys,
     model: opts.model,
@@ -224,7 +234,9 @@ export function inputSignature(input: string): string {
   } catch {
     /* missing file — signature still includes path */
   }
-  return createHash("sha1").update(`${resolve(input)}|${size}|${mtime}`).digest("hex");
+  return createHash("sha1")
+    .update(`${resolve(input)}|${size}|${mtime}`)
+    .digest("hex");
 }
 
 /**

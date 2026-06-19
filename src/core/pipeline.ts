@@ -20,7 +20,14 @@ import {
   type ApiKeys,
 } from "./config.js";
 import { logger } from "../utils/logger.js";
-import type { Segment, TranscriptMetadata, TranscriptResult, TimestampedWord, TimestampedUtterance, ChunkPlan } from "./types.js";
+import type {
+  Segment,
+  TranscriptMetadata,
+  TranscriptResult,
+  TimestampedWord,
+  TimestampedUtterance,
+  ChunkPlan,
+} from "./types.js";
 import {
   checkFfmpeg,
   probe,
@@ -36,7 +43,12 @@ import { AssemblyAIProvider } from "../providers/assemblyai.js";
 import { WhisperGroqClient } from "../providers/whisper-groq.js";
 import { setLlmLogPath } from "../providers/llm-log.js";
 import { describeMeeting, type MeetingDescription } from "../transcribe/describe.js";
-import { transcribeChunk, partitionByOwnership, type ParsedLlmSegment, type ChunkTranscriptionResult } from "../transcribe/llm-transcribe.js";
+import {
+  transcribeChunk,
+  partitionByOwnership,
+  type ParsedLlmSegment,
+  type ChunkTranscriptionResult,
+} from "../transcribe/llm-transcribe.js";
 import { alignSegments, type AlignedSegment } from "../align/aligner.js";
 import { fillAsrGaps } from "../align/fill-gaps.js";
 import { assignGlobalSpeakers } from "../diarize/consistency.js";
@@ -61,7 +73,11 @@ function writeJson(p: string, data: unknown): void {
 }
 
 /** Run async tasks with a concurrency cap, preserving order. */
-async function mapPool<T, R>(items: T[], limit: number, fn: (item: T, i: number) => Promise<R>): Promise<R[]> {
+async function mapPool<T, R>(
+  items: T[],
+  limit: number,
+  fn: (item: T, i: number) => Promise<R>,
+): Promise<R[]> {
   const results: R[] = new Array(items.length);
   let next = 0;
   const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
@@ -80,14 +96,14 @@ function has(passes: Pass[], p: Pass): boolean {
 }
 
 export async function transcribe(opts: PipelineOptions): Promise<TranscriptResult> {
-  // Validate the required options up front with clear messages (rather than crashing
-  // deep in path-resolution when called as a library without input/outputDir).
+  // Validate the one truly-required option up front with a clear message (rather than
+  // crashing deep in path-resolution when called as a library without an input).
   if (!opts || typeof opts.input !== "string" || opts.input.length === 0) {
-    throw new Error("transcribe(options): 'input' (path to the audio/video file) is required");
+    throw new Error(
+      "transcribe(options): 'input' (path to the audio/video file) is required",
+    );
   }
-  if (typeof opts.outputDir !== "string" || opts.outputDir.length === 0) {
-    throw new Error("transcribe(options): 'outputDir' (directory for outputs) is required");
-  }
+  // outputDir is optional — it defaults to the input file's own directory (resolveOptions).
 
   const options = resolveOptions(opts);
   const keys = resolveKeys(options.apiKeys);
@@ -103,7 +119,9 @@ export async function transcribe(opts: PipelineOptions): Promise<TranscriptResul
   mkdirSync(options.outputDir, { recursive: true });
   // Surface where the working files live (defaults to the OS temp dir) so it's easy to open
   // — most terminals linkify the file:// URL. Pass -i to put it somewhere permanent.
-  logger.info(`intermediates: ${resolve(options.intermediatesDir)}  (file://${resolve(options.intermediatesDir)})`);
+  logger.info(
+    `intermediates: ${resolve(options.intermediatesDir)}  (file://${resolve(options.intermediatesDir)})`,
+  );
   // Log every LLM call (prompt + response + usage + timing) for validation.
   setLlmLogPath(options.llmLog ? `${options.intermediatesDir}/llm-calls.jsonl` : null);
 
@@ -116,7 +134,9 @@ export async function transcribe(opts: PipelineOptions): Promise<TranscriptResul
   const sourcePath = `${options.intermediatesDir}/source.json`;
   const sig = inputSignature(options.input);
   const cfgSig = configSignature(opts);
-  const prevSig = readJson<{ signature?: string; config?: string; input?: string }>(sourcePath);
+  const prevSig = readJson<{ signature?: string; config?: string; input?: string }>(
+    sourcePath,
+  );
   const inputChanged = !prevSig || prevSig.signature !== sig;
   const configChanged = !prevSig || prevSig.config !== cfgSig;
   if (inputChanged && prevSig) {
@@ -213,12 +233,20 @@ export async function transcribe(opts: PipelineOptions): Promise<TranscriptResul
           if (existsSync(p)) files.push({ path: p });
         }
       }
-      description = await describeMeeting(client, models.transcribe, files, basename(options.input), options.instructions);
+      description = await describeMeeting(
+        client,
+        models.transcribe,
+        files,
+        basename(options.input),
+        options.instructions,
+      );
       writeJson(descPath, description);
       logger.info(`description: ${description.description.slice(0, 120)}...`);
     }
   } else {
-    description = forceAll ? null : readJson<MeetingDescription>(`${options.intermediatesDir}/description.json`);
+    description = forceAll
+      ? null
+      : readJson<MeetingDescription>(`${options.intermediatesDir}/description.json`);
   }
 
   // ---------- 3. LLM-TRANSCRIBE (per chunk, concurrent) ----------
@@ -231,14 +259,19 @@ export async function transcribe(opts: PipelineOptions): Promise<TranscriptResul
     let silences: { start: number; end: number; duration: number }[] = [];
     try {
       silences = await detectSilence(audioPath, { noiseDb: -15, minDuration: 0.3 });
-      if (silences.length < 3) silences = await detectSilence(audioPath, { noiseDb: -12, minDuration: 0.25 });
+      if (silences.length < 3)
+        silences = await detectSilence(audioPath, { noiseDb: -12, minDuration: 0.25 });
     } catch {
       /* ignore */
     }
     chunks = planChunks(duration, options.chunkDurationSec, options.chunkOverlapSec);
     if (silences.length > 3) {
       chunks = chunks.map((c) => {
-        const snapped = snapToSilence(c.start, silences, Math.min(10, options.chunkOverlapSec / 2));
+        const snapped = snapToSilence(
+          c.start,
+          silences,
+          Math.min(10, options.chunkOverlapSec / 2),
+        );
         // trustedStart must follow the snapped start so ownership partitioning is correct.
         return { ...c, start: snapped, trustedStart: snapped + c.overlapWithPrevious };
       });
@@ -247,17 +280,27 @@ export async function transcribe(opts: PipelineOptions): Promise<TranscriptResul
 
   // Tag every LLM segment with its source chunk's index + trustedStart (for ownership
   // partitioning below).
-  const tagWith = (r: ChunkTranscriptionResult, chunk: ChunkPlan): ChunkTranscriptionResult => ({
+  const tagWith = (
+    r: ChunkTranscriptionResult,
+    chunk: ChunkPlan,
+  ): ChunkTranscriptionResult => ({
     ...r,
-    segments: r.segments.map((s) => ({ ...s, chunkIndex: chunk.index, trustedStart: chunk.trustedStart })),
+    segments: r.segments.map((s) => ({
+      ...s,
+      chunkIndex: chunk.index,
+      trustedStart: chunk.trustedStart,
+    })),
   });
 
   let llmChunkResults: ChunkTranscriptionResult[] = [];
   if (has(passes, "llm-transcribe")) {
     logger.info("=== llm-transcribe ===");
     let runChunks = chunks;
-    if (options.onlyChunk !== undefined) runChunks = chunks.filter((c) => c.index === options.onlyChunk);
-    logger.info(`${runChunks.length} chunks (${options.chunkDurationSec}s, ${options.chunkOverlapSec}s overlap)`);
+    if (options.onlyChunk !== undefined)
+      runChunks = chunks.filter((c) => c.index === options.onlyChunk);
+    logger.info(
+      `${runChunks.length} chunks (${options.chunkDurationSec}s, ${options.chunkOverlapSec}s overlap)`,
+    );
 
     const client = new GeminiClient(keys.gemini!);
     const llmDir = `${options.intermediatesDir}/llm`;
@@ -281,10 +324,15 @@ export async function transcribe(opts: PipelineOptions): Promise<TranscriptResul
           `${llmDir}/chunk_${String(chunk.index - 1).padStart(2, "0")}_parsed.json`,
         );
         if (prev && prev.segments.length) {
-          previousTail = prev.segments.slice(-6).map((s) => `${s.speaker}: ${s.text}`).join("\n");
+          previousTail = prev.segments
+            .slice(-6)
+            .map((s) => `${s.speaker}: ${s.text}`)
+            .join("\n");
         }
       }
-      logger.info(`chunk ${chunk.index}: transcribing [${chunk.start.toFixed(0)}-${chunk.end.toFixed(0)}]s...`);
+      logger.info(
+        `chunk ${chunk.index}: transcribing [${chunk.start.toFixed(0)}-${chunk.end.toFixed(0)}]s...`,
+      );
       const result = await transcribeChunk(
         client,
         models.transcribe,
@@ -301,7 +349,10 @@ export async function transcribe(opts: PipelineOptions): Promise<TranscriptResul
         { chunkDurationSec: chunk.end - chunk.start, validationRetries: 1 },
       );
       writeJson(parsedPath, result);
-      writeFileSync(`${llmDir}/chunk_${String(chunk.index).padStart(2, "0")}_raw.json`, result.raw);
+      writeFileSync(
+        `${llmDir}/chunk_${String(chunk.index).padStart(2, "0")}_raw.json`,
+        result.raw,
+      );
       return tagWith(result, chunk);
     });
 
@@ -310,7 +361,11 @@ export async function transcribe(opts: PipelineOptions): Promise<TranscriptResul
     // fall through to an ASR-only gap-fill and report a near-empty "success".
     const errored = llmChunkResults.filter((r) => r.error);
     const producedSegments = llmChunkResults.reduce((n, r) => n + r.segments.length, 0);
-    if (llmChunkResults.length > 0 && producedSegments === 0 && errored.length === llmChunkResults.length) {
+    if (
+      llmChunkResults.length > 0 &&
+      producedSegments === 0 &&
+      errored.length === llmChunkResults.length
+    ) {
       throw new Error(
         `LLM transcription failed for all ${llmChunkResults.length} chunk(s) with model "${models.transcribe}". First error: ${errored[0]!.error}`,
       );
@@ -369,13 +424,21 @@ export async function transcribe(opts: PipelineOptions): Promise<TranscriptResul
       writeJson(`${options.intermediatesDir}/timestamped.json`, asrResult);
     } else {
       logger.info("=== timestamped (AssemblyAI) ===");
-      if (!keys.assemblyai) throw new Error("ASSEMBLYAI_API_KEY is required for the timestamped pass (or use --timestamped whisper-groq)");
-      const aai = new AssemblyAIProvider({ apiKey: keys.assemblyai!, cacheDir: `${options.intermediatesDir}/assemblyai` });
+      if (!keys.assemblyai)
+        throw new Error(
+          "ASSEMBLYAI_API_KEY is required for the timestamped pass (or use --timestamped whisper-groq)",
+        );
+      const aai = new AssemblyAIProvider({
+        apiKey: keys.assemblyai!,
+        cacheDir: `${options.intermediatesDir}/assemblyai`,
+      });
       asrResult = await aai.transcribe(audioPath);
       writeJson(`${options.intermediatesDir}/timestamped.json`, asrResult);
     }
   } else {
-    asrResult = forceAll ? null : readJson(`${options.intermediatesDir}/timestamped.json`);
+    asrResult = forceAll
+      ? null
+      : readJson(`${options.intermediatesDir}/timestamped.json`);
   }
 
   // ---------- 5. ALIGN ----------
@@ -385,7 +448,10 @@ export async function transcribe(opts: PipelineOptions): Promise<TranscriptResul
     aligned = alignSegments(allLlmSegments, asrResult.words, { timeMarginSec: 30 });
     writeJson(`${options.intermediatesDir}/aligned.json`, aligned);
   } else {
-    aligned = (forceAll ? null : readJson<AlignedSegment[]>(`${options.intermediatesDir}/aligned.json`)) ?? [];
+    aligned =
+      (forceAll
+        ? null
+        : readJson<AlignedSegment[]>(`${options.intermediatesDir}/aligned.json`)) ?? [];
   }
   const alignedOk = aligned.filter((a) => a.timingSource !== "coarse").length;
   logger.info(`aligned: ${alignedOk}/${aligned.length} with ASR timing`);
@@ -430,7 +496,11 @@ export async function transcribe(opts: PipelineOptions): Promise<TranscriptResul
     description
   ) {
     logger.info("=== identify (DeepSeek) ===");
-    const dsClient = OpenAICompatClient.fromProvider("deepseek", keys.deepseek, models.reasoner);
+    const dsClient = OpenAICompatClient.fromProvider(
+      "deepseek",
+      keys.deepseek,
+      models.reasoner,
+    );
     const id = await identifySpeakers(
       dsClient,
       models.reasoner,
@@ -439,7 +509,9 @@ export async function transcribe(opts: PipelineOptions): Promise<TranscriptResul
       description.roster,
       options.knownSpeakers,
     );
-    logger.info(`identified ${Object.keys(id.nameMap).length} speakers: ${JSON.stringify(id.nameMap)}`);
+    logger.info(
+      `identified ${Object.keys(id.nameMap).length} speakers: ${JSON.stringify(id.nameMap)}`,
+    );
     writeJson(`${options.intermediatesDir}/identified.json`, id);
     segments = segments.map((s) =>
       id.nameMap[s.speaker] ? { ...s, speakerName: id.nameMap[s.speaker] } : s,
@@ -456,7 +528,9 @@ export async function transcribe(opts: PipelineOptions): Promise<TranscriptResul
     finalSegments = finalizeSegments(segments);
     writeJson(`${options.intermediatesDir}/final.json`, finalSegments);
   } else {
-    finalSegments = (forceAll ? null : readJson<Segment[]>(`${options.intermediatesDir}/final.json`)) ?? [];
+    finalSegments =
+      (forceAll ? null : readJson<Segment[]>(`${options.intermediatesDir}/final.json`)) ??
+      [];
   }
   logger.info(`final segments: ${finalSegments.length}`);
 
@@ -480,9 +554,18 @@ export async function transcribe(opts: PipelineOptions): Promise<TranscriptResul
 
   for (const fmt of options.formats) {
     const base = basename(options.input, ext(options.input));
-    if (fmt === "srt") writeFileSync(`${options.outputDir}/${base}.srt`, formatSrt(result, { title: base }));
-    if (fmt === "md") writeFileSync(`${options.outputDir}/${base}.md`, formatMarkdown(result, { title: base }));
-    if (fmt === "json") writeFileSync(`${options.outputDir}/${base}.json`, formatJson(result));
+    if (fmt === "srt")
+      writeFileSync(
+        `${options.outputDir}/${base}.srt`,
+        formatSrt(result, { title: base }),
+      );
+    if (fmt === "md")
+      writeFileSync(
+        `${options.outputDir}/${base}.md`,
+        formatMarkdown(result, { title: base }),
+      );
+    if (fmt === "json")
+      writeFileSync(`${options.outputDir}/${base}.json`, formatJson(result));
   }
   logger.info(`outputs written to ${options.outputDir}`);
   return result;

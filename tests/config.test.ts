@@ -22,7 +22,7 @@ describe("resolveOptions", () => {
     expect(o.chunkOverlapSec).toBe(60);
     expect(o.concurrency).toBe(4);
     expect(o.diarizationLevel).toBe(2);
-    expect(o.formats).toEqual(["srt", "md", "json"]);
+    expect(o.formats).toEqual(["md"]);
   });
 });
 

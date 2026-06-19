@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { tmpdir } from "node:os";
-import { configSignature, deriveIntermediatesDir } from "../src/core/config.js";
+import { configSignature, deriveIntermediatesDir, resolveOptions, DEFAULT_TRANSCRIBE_MODEL } from "../src/core/config.js";
 import { resolveThinking, isThinkingConfigError } from "../src/providers/gemini.js";
 import { transcribe } from "../src/core/pipeline.js";
 
@@ -18,13 +18,23 @@ describe("configSignature (cache invalidation on option change)", () => {
     expect(configSignature({ ...base, instructions: "label the host" })).not.toBe(ref);
     expect(configSignature({ ...base, chunkDurationSec: 300 })).not.toBe(ref);
     expect(configSignature({ ...base, chunkOverlapSec: 30 })).not.toBe(ref);
-    expect(configSignature({ ...base, timestampedProvider: "whisper-groq" })).not.toBe(ref);
+    expect(configSignature({ ...base, timestampedProvider: "whisper-groq" })).not.toBe(
+      ref,
+    );
     expect(configSignature({ ...base, diarizationLevel: 3 })).not.toBe(ref);
   });
 
   it("is stable for options that don't affect intermediates", () => {
     const ref = configSignature(base);
-    expect(configSignature({ ...base, outputDir: "other", formats: ["srt"], concurrency: 1, logLevel: "debug" })).toBe(ref);
+    expect(
+      configSignature({
+        ...base,
+        outputDir: "other",
+        formats: ["srt"],
+        concurrency: 1,
+        logLevel: "debug",
+      }),
+    ).toBe(ref);
   });
 });
 
@@ -37,7 +47,9 @@ describe("deriveIntermediatesDir (defaults to OS temp dir)", () => {
   });
   it("is stable per input path and distinct across inputs", () => {
     expect(deriveIntermediatesDir("/a/x.mp4")).toBe(deriveIntermediatesDir("/a/x.mp4"));
-    expect(deriveIntermediatesDir("/a/x.mp4")).not.toBe(deriveIntermediatesDir("/b/x.mp4"));
+    expect(deriveIntermediatesDir("/a/x.mp4")).not.toBe(
+      deriveIntermediatesDir("/b/x.mp4"),
+    );
   });
 });
 
@@ -54,8 +66,10 @@ describe("resolveThinking (per-model thinking config)", () => {
     expect(resolveThinking("gemini-2.0-flash")).toBeUndefined();
   });
   it("recognizes thinking-config rejection messages", () => {
-    expect(isThinkingConfigError("Thinking level MINIMAL is not supported for this model.")).toBe(true);
-    expect(isThinkingConfigError("Unknown name \"thinkingConfig\"")).toBe(true);
+    expect(
+      isThinkingConfigError("Thinking level MINIMAL is not supported for this model."),
+    ).toBe(true);
+    expect(isThinkingConfigError('Unknown name "thinkingConfig"')).toBe(true);
     expect(isThinkingConfigError("rate limit exceeded")).toBe(false);
   });
 });
@@ -65,8 +79,17 @@ describe("transcribe() option validation (clear errors, not cryptic crashes)", (
     // @ts-expect-error intentionally bad
     await expect(transcribe({ outputDir: "out" })).rejects.toThrow(/'input'.*required/);
   });
-  it("rejects a missing outputDir", async () => {
-    // @ts-expect-error intentionally bad
-    await expect(transcribe({ input: "a.mp4" })).rejects.toThrow(/'outputDir'.*required/);
+  it("defaults the transcription model to gemini-3.1-pro-preview", () => {
+    expect(DEFAULT_TRANSCRIBE_MODEL).toBe("gemini-3.1-pro-preview");
+  });
+  it("defaults outputDir to the input's folder and format to markdown", () => {
+    const o = resolveOptions({ input: "/a/b/meeting.mp4" });
+    expect(o.outputDir).toBe("/a/b");
+    expect(o.formats).toEqual(["md"]);
+  });
+  it("still honors an explicit outputDir / formats", () => {
+    const o = resolveOptions({ input: "/a/b/meeting.mp4", outputDir: "/out", formats: ["srt", "json"] });
+    expect(o.outputDir).toBe("/out");
+    expect(o.formats).toEqual(["srt", "json"]);
   });
 });

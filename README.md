@@ -28,17 +28,19 @@ and **fuses** them.
 export GEMINI_API_KEY=...        # multimodal understanding (or GOOGLE_API_KEY)
 export ASSEMBLYAI_API_KEY=...    # word-level timing
 
-npx offmute-v2 meeting.mp4 -i "Panel of founders; label them by name."
-# → meeting.srt   meeting.md   meeting.json
+npx offmute-v2 meeting.mp4 --instructions "Panel of founders; label them by name."
+# → meeting.md   (written right next to meeting.mp4)
 ```
 
 That's it. `bunx offmute-v2 meeting.mp4` works too.
 
 ## What you get
 
-A clean, sub-second-aligned, speaker-labelled transcript with tone — same content rendered three ways:
+A clean, sub-second-aligned, speaker-labelled transcript with tone. By default offmute-v2 writes a
+**single `meeting.md` next to your input file** — add `--formats srt,md,json` (and/or `-o <dir>`) for
+SubRip subtitles and JSON. The same content, three ways:
 
-**`meeting.srt`** (drop straight onto the video):
+**`meeting.srt`** (`--formats srt` — drop straight onto the video):
 
 ```srt
 1
@@ -50,34 +52,36 @@ Speaker D: GPU
 Presenter: And I'm inspired. I think I'm going to apply to NTU this fall. (confident, joking)
 ```
 
-**`meeting.md`** (skimmable, grouped by speaker, with talk-time):
+**`meeting.md`** (the **default** — skimmable, grouped by speaker, with talk-time):
 
 ```markdown
-*Duration: 1914s · Speakers: 5*
+_Duration: 1914s · Speakers: 5_
 
 ## Speakers
+
 - **Presenter** (1461s)
-- **Speaker B** (97s)  ·  **Speaker C** (87s)  ·  ...
+- **Speaker B** (97s) · **Speaker C** (87s) · ...
 
 ## Transcript
+
 [00:00] **Speaker D**: GPU
-[00:01] **Presenter** *(confident, joking)*: And I'm inspired. I think I'm going to apply to NTU this fall.
+[00:01] **Presenter** _(confident, joking)_: And I'm inspired. I think I'm going to apply to NTU this fall.
 ```
 
-**`meeting.json`** — every segment with `start`/`end`, `speaker`, `text`, `tone[]`, `timingSource`,
-`confidence`, and word-level timings — for downstream tooling.
+**`meeting.json`** (`--formats json`) — every segment with `start`/`end`, `speaker`, `text`,
+`tone[]`, `timingSource`, `confidence`, and word-level timings — for downstream tooling.
 
 ## Why it's accurate
 
-LLMs are brilliant at *understanding* speech (who's talking, through interruptions, in a crowd,
+LLMs are brilliant at _understanding_ speech (who's talking, through interruptions, in a crowd,
 with tone) but [terrible at timestamps](#how-it-works). ASR models are the opposite: sub-second
 timing, but mediocre diarization and no sense of tone. offmute-v2 runs **both** and marries them:
 
-| Job | Tool | Why |
-|-----|------|-----|
-| **WHO / HOW** — speakers, names, tone, hard audio | multimodal **LLM** (Gemini) | infers names from context, hears tone, handles crowds & interruptions |
-| **WHEN** — word-level timestamps | **ASR** (AssemblyAI / Groq Whisper) | sub-second accurate; LLM timestamps drift *minutes* over a long file |
-| **fuse** | edit-distance **alignment** | transfers the ASR's clock onto the LLM's richer words |
+| Job                                               | Tool                                | Why                                                                   |
+| ------------------------------------------------- | ----------------------------------- | --------------------------------------------------------------------- |
+| **WHO / HOW** — speakers, names, tone, hard audio | multimodal **LLM** (Gemini)         | infers names from context, hears tone, handles crowds & interruptions |
+| **WHEN** — word-level timestamps                  | **ASR** (AssemblyAI / Groq Whisper) | sub-second accurate; LLM timestamps drift _minutes_ over a long file  |
+| **fuse**                                          | edit-distance **alignment**         | transfers the ASR's clock onto the LLM's richer words                 |
 
 ```mermaid
 flowchart LR
@@ -111,7 +115,7 @@ and an independent re-score live in [`docs/`](#receipts--how-this-repo-was-built
   the path is printed each run, and `-i <dir>` keeps it wherever you like). Re-runs skip finished
   work, Ctrl-C leaves partials. The cache is keyed on the input **and** the config, so changing
   `--model` never serves you a stale transcript.
-- 🔀 **Pluggable providers** — Gemini for the LLM; AssemblyAI *or* Groq Whisper for timing.
+- 🔀 **Pluggable providers** — Gemini for the LLM; AssemblyAI _or_ Groq Whisper for timing.
 - 🌐 **Runs in the browser** — a pure, node-free core + `fetch` providers + ffmpeg.wasm.
 - 🔎 **Fully inspectable** — every LLM prompt+response is logged to `llm-calls.jsonl`; all
   intermediates are plain JSON.
@@ -124,20 +128,20 @@ and an independent re-score live in [`docs/`](#receipts--how-this-repo-was-built
 npx offmute-v2 <input> [options]
 ```
 
-| Option | Default | Description |
-|--------|---------|-------------|
-| `-o, --output <dir>` | `./output` | where to write `*.srt` / `*.md` / `*.json` |
-| `--instructions <text>` | – | guide diarization / labelling, e.g. `"host is Alice; group callers as 'Caller'"` |
-| `--model <name>` | `gemini-2.5-flash` | multimodal LLM (`gemini-2.5-pro`, `gemini-3.1-pro-preview`, `gemini-flash-latest`, …) |
-| `--level <1\|2\|3>` | `2` | 1 = separation · 2 = stable anon · 3 = identify names |
-| `--timestamped <p>` | `assemblyai` | timing provider: `assemblyai` · `whisper-groq` · `none` |
-| `--reasoner <name>` | `deepseek-chat` | text model for the name-identification pass (level 3) |
-| `--chunk-seconds <n>` | `600` | chunk length · `--overlap-seconds` (default `60`) |
-| `--formats <list>` | `srt,md,json` | which outputs to write |
-| `--passes <list>` | all | run/resume a subset of stages |
-| `--force` | – | ignore caches and recompute |
-| `--only-chunk <n>` | – | process a single chunk (debugging) |
-| `-i, --intermediates <dir>` | auto | cache dir (auto-derived per input) |
+| Option                      | Default            | Description                                                                           |
+| --------------------------- | ------------------ | ------------------------------------------------------------------------------------- |
+| `-o, --output <dir>`        | _next to input_    | where to write the transcript(s); default is the input file's own folder              |
+| `--instructions <text>`     | –                  | guide diarization / labelling, e.g. `"host is Alice; group callers as 'Caller'"`      |
+| `--model <name>`            | `gemini-3.1-pro-preview` | multimodal LLM; use `gemini-2.5-flash` / `gemini-flash-latest` for faster/cheaper runs |
+| `--level <1\|2\|3>`         | `2`                | 1 = separation · 2 = stable anon · 3 = identify names                                 |
+| `--timestamped <p>`         | `assemblyai`       | timing provider: `assemblyai` · `whisper-groq` · `none`                               |
+| `--reasoner <name>`         | `deepseek-chat`    | text model for the name-identification pass (level 3)                                 |
+| `--chunk-seconds <n>`       | `600`              | chunk length · `--overlap-seconds` (default `60`)                                     |
+| `--formats <list>`          | `md`               | which outputs to write (`srt`, `md`, `json`)                                          |
+| `--passes <list>`           | all                | run/resume a subset of stages                                                         |
+| `--force`                   | –                  | ignore caches and recompute                                                           |
+| `--only-chunk <n>`          | –                  | process a single chunk (debugging)                                                    |
+| `-i, --intermediates <dir>` | auto               | cache dir (auto-derived per input)                                                    |
 
 ```bash
 npx offmute-v2 meeting.mp4 --level 3                       # name the speakers
@@ -148,18 +152,19 @@ npx offmute-v2 meeting.mp4 --passes align,consistency,finalize   # resume from c
 
 ### Library
 
-The primary line takes a single options object (`input` and `outputDir` are required):
+The primary line takes a single options object. Only `input` is required — `outputDir` defaults to
+the input file's folder and `formats` defaults to `["md"]`:
 
 ```ts
 import { transcribe } from "offmute-v2";
 
 const { segments, speakers, metadata } = await transcribe({
   input: "meeting.mp4",
-  outputDir: "./out",
+  // outputDir: "./out",          // optional — defaults next to the input
   model: "gemini-flash-latest",
   level: 3,
   instructions: "Three-person panel; label by name.",
-  formats: ["srt", "md", "json"],
+  formats: ["srt", "md", "json"], // optional — defaults to ["md"]
   apiKeys: { gemini: "...", assemblyai: "..." }, // optional; falls back to env
 });
 
@@ -195,14 +200,14 @@ debuggable):
    so nothing is dropped.
 7. **consistency** — the ASR voice clusters act as a global backbone, merging the LLM's per-chunk
    labels into stable speakers (and fixing ASR over-splits).
-8. **identify** *(level 3)* — a reasoning model maps `Speaker A` → real names using context + a
+8. **identify** _(level 3)_ — a reasoning model maps `Speaker A` → real names using context + a
    voice-cluster hint.
 9. **finalize** — overlap fixes, clamping, readable subtitle-sized blocks, and SRT/MD/JSON.
 
 > [!NOTE]
 > The hard parts of this problem are **chunk overlap** and **alignment**. offmute-v2 partitions
-> overlap by *ownership* (each word is emitted by exactly one chunk) so sentences are never
-> double-printed at seams, and aligns the *whole* chunk in one DP pass so common words like "it"
+> overlap by _ownership_ (each word is emitted by exactly one chunk) so sentences are never
+> double-printed at seams, and aligns the _whole_ chunk in one DP pass so common words like "it"
 > can't mis-match to a later occurrence.
 
 ## Built twice, in the open: GLM vs Opus
@@ -212,11 +217,11 @@ prompt**, by two different models running in **Claude Code** — a head-to-head 
 AI-resistant build (fusing the ideas of [offmute], [meeting-diary], and [ipgu] into one
 timestamp-accurate diarizer):
 
-| Branch | Built by | npm tag | What it is |
-|--------|----------|---------|------------|
+| Branch                        | Built by                     | npm tag             | What it is                                     |
+| ----------------------------- | ---------------------------- | ------------------- | ---------------------------------------------- |
 | [`master`](../../tree/master) | GLM line + post-launch fixes | `offmute-v2@latest` | the daily-driven, hardened build (this README) |
-| [`glm`](../../tree/glm) | **GLM-5.2** | `offmute-v2@glm` | the frozen GLM experiment build |
-| [`opus`](../../tree/opus) | **Claude Opus 4.8** | `offmute-v2@opus` | the frozen Opus experiment build |
+| [`glm`](../../tree/glm)       | **GLM-5.2**                  | `offmute-v2@glm`    | the frozen GLM experiment build                |
+| [`opus`](../../tree/opus)     | **Claude Opus 4.8**          | `offmute-v2@opus`   | the frozen Opus experiment build               |
 
 ```bash
 npx offmute-v2@glm   meeting.mp4   # the GLM build, exactly as submitted
@@ -242,10 +247,10 @@ Everything is open for inspection:
 ## Diarization levels
 
 1. **Separation** — who speaks when.
-2. **Anonymous-consistent** — `Speaker A/B`, stable across the whole file *(default)*.
+2. **Anonymous-consistent** — `Speaker A/B`, stable across the whole file _(default)_.
 3. **Identification** — real names inferred from context (needs `DEEPSEEK_API_KEY`, or point
-   `--reasoner` at another provider). Use `--instructions` to steer (e.g. *"everyone except the
-   host is 'Audience'"*).
+   `--reasoner` at another provider). Use `--instructions` to steer (e.g. _"everyone except the
+   host is 'Audience'"_).
 
 ## Requirements
 

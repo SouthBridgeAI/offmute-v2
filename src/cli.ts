@@ -25,7 +25,7 @@ program
   .description("Diarized meeting transcription with multimodal LLMs + timestamped alignment.")
   .version(packageVersion)
   .argument("<input>", "input video/audio file")
-  .option("-o, --output <dir>", "output directory", "./output")
+  .option("-o, --output <dir>", "output directory (default: next to the input file)")
   .option(
     "-i, --intermediates <dir>",
     "intermediates directory (default: auto-derived per input file so caches never collide)",
@@ -36,7 +36,7 @@ program
   .option("--overlap-seconds <n>", "chunk overlap in seconds", "60")
   .option("--concurrency <n>", "max concurrent chunk requests", "4")
   .option("--screenshots <n>", "number of keyframes to extract (video)", "6")
-  .option("--formats <list>", "output formats: srt,md,json", "srt,md,json")
+  .option("--formats <list>", "output formats: srt,md,json (default: md)")
   .option("--level <1|2|3>", "diarization level (1=separation, 2=consistent, 3=identify)", "2")
   .option("--model <name>", "override transcription model")
   .option("--reasoner <name>", "override text-reasoner model (default deepseek-chat)")
@@ -62,7 +62,7 @@ const level = parseInt(opts.level, 10) as 1 | 2 | 3;
 
 transcribe({
   input,
-  outputDir: opts.output,
+  outputDir: opts.output, // undefined → defaults to the input file's directory
   intermediatesDir: opts.intermediates,
   instructions: opts.instructions,
   passes,
@@ -70,7 +70,7 @@ transcribe({
   chunkOverlapSec: parseInt(opts.overlapSeconds, 10),
   concurrency: parseInt(opts.concurrency, 10),
   screenshotCount: parseInt(opts.screenshots, 10),
-  formats: opts.formats.split(","),
+  formats: opts.formats ? opts.formats.split(",") : undefined, // undefined → defaults to ["md"]
   diarizationLevel: level,
   model: opts.model,
   reasoner: opts.reasoner,

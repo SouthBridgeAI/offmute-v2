@@ -1,6 +1,6 @@
 {
   "name": "offmute-v2",
-  "version": "0.0.4",
+  "version": "0.0.5",
   "description": "Best-in-class diarized meeting transcription with multimodal LLMs + timestamped alignment.",
   "author": "Southbridge",
   "license": "Apache-2.0",
