@@ -1,6 +1,6 @@
 {
   "name": "offmute-v2",
-  "version": "1.0.0",
+  "version": "0.0.1",
   "description": "Best-in-class diarized meeting transcription with multimodal LLMs + timestamped alignment.",
   "author": "Southbridge",
   "license": "Apache-2.0",
@@ -80,7 +80,11 @@
     "@ffmpeg/util": "^0.12.0"
   },
   "peerDependenciesMeta": {
-    "@ffmpeg/ffmpeg": { "optional": true },
-    "@ffmpeg/util": { "optional": true }
+    "@ffmpeg/ffmpeg": {
+      "optional": true
+    },
+    "@ffmpeg/util": {
+      "optional": true
+    }
   }
 }
