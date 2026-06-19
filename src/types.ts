@@ -32,10 +32,19 @@ export interface AsrUtterance {
   /** ASR speaker label (e.g. "A") */
   speaker: string;
   confidence?: number;
+  /** Per-utterance words — OPTIONAL on purpose: alignment uses the flat
+   * AsrResult.words instead, and not every provider/config populates this. */
   words?: TimedWord[];
 }
 
-/** Normalized result from any ASR provider. */
+/**
+ * Normalized result from any ASR provider. We keep TWO views of the same audio
+ * because they feed different consumers:
+ *  - `words`: flat, ungrouped word stream — the substrate the LLM transcript is
+ *    aligned against to read precise timings. (Required.)
+ *  - `utterances`: speaker-grouped turns — used to build the prompt's "ASR hint"
+ *    and to render the provider's own diarization. (Required.)
+ */
 export interface AsrResult {
   provider: string;
   /** model / config used, for provenance */

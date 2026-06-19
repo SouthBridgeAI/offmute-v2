@@ -73,6 +73,8 @@ console.log(transcript.segments[0]);       // { start, end, speakerId, text, ton
 
 Long files (>35 min) are automatically chunked with overlap and stitched back together; the whole-file ASR voice clusters keep speaker identity consistent across chunks.
 
+**More options:** `signal: AbortSignal` to cancel (cooperatively, at stage/chunk boundaries); `onLlmCall(rec)` to observe every LLM call (`{label, promptText, responseText, usage}`); `knownSpeakers`, `subSegment`, `identifySpeakers`, `asr: "none"`. Every LLM call (prompt + response) and the raw→parsed diarization are also written to `intermediates/<name>/llm/` and `diarize.parsed.json` for inspection.
+
 ## Browser
 
 Runs **entirely in the browser** (`offmute-v2/browser`, ~50KB, zero deps): decode with
