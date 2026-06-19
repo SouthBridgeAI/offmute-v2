@@ -149,8 +149,19 @@ npm run build  # tsup → dist/ (node + browser bundles)
 
 ## Eval
 ```bash
-npx tsx scripts/eval.ts output/run1/talk-with-questions.json   # vs test-files/1 reference SRT
+npx tsx scripts/eval.ts path/to/output.json   # score a run vs the reference SRT
 ```
+
+## Reviews, fixes & receipts
+This build (the **GLM** branch) was reviewed and iterated in the open. The receipts:
+- **Spec & plan:** [`docs/spec.md`](docs/spec.md)
+- **Round 1** (run-through): [`docs/review-1/human-review.md`](docs/review-1/human-review.md) → fixes in [`docs/review-1/review-fixes.md`](docs/review-1/review-fixes.md)
+- **Round 2** (code read + independent review): [`docs/review-2/human-review.md`](docs/review-2/human-review.md), [`docs/review-2/REVIEW.md`](docs/review-2/REVIEW.md), [`docs/review-2/REVIEWER_GUIDE.md`](docs/review-2/REVIEWER_GUIDE.md) → fixes in [`docs/review-2/review-fixes.md`](docs/review-2/review-fixes.md)
+- **Response to the GLM-vs-Opus comparison:** [`docs/comparison-response.md`](docs/comparison-response.md)
+- **Dev journal:** [`intermediates/process_log_thoughts_ideas_hypotheses_and_scratch_space.md`](intermediates/process_log_thoughts_ideas_hypotheses_and_scratch_space.md)
+- **Releasing / npm tags:** [`RELEASING.md`](RELEASING.md)
+
+The Opus-built variant lives on the [`opus`](../../tree/opus) branch; the experiment overview is on [`master`](../../tree/master).
 
 ## License
 Apache-2.0.
