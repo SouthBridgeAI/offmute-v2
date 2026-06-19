@@ -41,6 +41,8 @@ export interface TranscribeInBrowserOptions {
   onProgress?: (e: BrowserProgress) => void;
   /** invoked once per LLM call with its prompt/response/usage (for inspection/debug) */
   onLlmCall?: (rec: LlmCallRecord) => void;
+  /** cancel the run (cooperatively, at stage and chunk boundaries) */
+  signal?: AbortSignal;
 }
 
 export interface BrowserTranscribeResult {
@@ -113,6 +115,7 @@ export async function transcribeInBrowser(
   // 4-5. diarize (single-pass or chunked) + align
   const gem = new GeminiFetchClient(apiKeys.gemini);
   if (options.onLlmCall) gem.onCall = options.onLlmCall;
+  const checkAbort = () => options.signal?.throwIfAborted();
   const maxSingleSec = (options.maxSinglePassMinutes ?? 35) * 60;
   const chunkSec = (options.chunkMinutes ?? 15) * 60;
   const overlapSec = (options.chunkOverlapMinutes ?? 2) * 60;
@@ -126,6 +129,7 @@ export async function transcribeInBrowser(
   let previousTail = "";
 
   for (const ch of timeChunks) {
+    checkAbort();
     progress("diarize", chunked ? `Diarizing chunk ${ch.index + 1}/${timeChunks.length}` : `Diarizing with ${llmModel}`);
     const audioBytes = chunked
       ? await extractAudioWasm(ffmpeg, null, { inputName: fullAudioName, startSeconds: ch.startSeconds, durationSeconds: ch.endSeconds - ch.startSeconds, keepInput: true })

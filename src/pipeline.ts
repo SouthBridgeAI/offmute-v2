@@ -44,6 +44,8 @@ export interface TranscribeOptions {
   onLlmCall?: (rec: LlmCallRecord) => void;
   /** write every LLM call (prompt + response) to intermediates/llm/ (default true) */
   logLlm?: boolean;
+  /** cancel the run (cooperatively, at stage and chunk boundaries) */
+  signal?: AbortSignal;
   apiKeys?: { gemini?: string; assemblyai?: string };
   /** force chunking threshold in minutes (default 35; longer files are chunked) */
   maxSinglePassMinutes?: number;
@@ -64,6 +66,17 @@ export interface TranscribeResult {
 
 const VIDEO_EXT = new Set([".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v"]);
 
+/** Run a stage, annotating any thrown error with which stage failed (e.g. "[asr] …"). */
+async function stage<T>(name: string, fn: () => Promise<T>): Promise<T> {
+  try {
+    return await fn();
+  } catch (e) {
+    const err = e as Error;
+    if (err?.name === "AbortError") throw err; // surface cancellation as-is
+    throw new Error(`[${name}] ${err?.message ?? String(e)}`, { cause: err });
+  }
+}
+
 export async function transcribe(
   input: string,
   options: TranscribeOptions = {}
@@ -80,12 +93,16 @@ export async function transcribe(
     cache = true,
     logLlm = true,
     onProgress,
+    signal,
     apiKeys,
   } = options;
 
   const progress = (stage: string, message: string, pct?: number) =>
     onProgress?.({ stage, message, pct });
+  // cooperative cancellation — called at stage/chunk boundaries
+  const checkAbort = () => signal?.throwIfAborted();
 
+  checkAbort();
   if (!existsSync(input)) throw new Error(`Input not found: ${input}`);
 
   const base = basename(input, extname(input));
@@ -134,17 +151,20 @@ export async function transcribe(
   }
 
   // 3. ASR pass (timing) -------------------------------------------------
+  checkAbort();
   let asr: AsrResult | undefined;
   if (asrProvider === "assemblyai") {
     progress("asr", "Transcribing for word-level timing (AssemblyAI)");
-    asr = await inter.cachedJSON<AsrResult>("asr.json", cache, async () => {
+    asr = await inter.cachedJSON<AsrResult>("asr.json", cache, async () =>
+      stage("asr", async () => {
       const { asr: r } = await transcribeWithAssemblyAI(audioPath, {
         apiKey: apiKeys?.assemblyai,
         speakerLabels: true,
         speechModel: options.asrModel,
       });
       return r;
-    });
+      })
+    );
   }
 
   // 4-5. Diarize (single-pass or chunked) + align -----------------------
@@ -177,6 +197,7 @@ export async function transcribe(
   let previousTail = "";
 
   for (const ch of timeChunks) {
+    checkAbort();
     progress("diarize", chunked ? `Diarizing chunk ${ch.index + 1}/${timeChunks.length}` : `Diarizing with ${llmModel}`);
 
     // chunk audio (full file for single-pass)
@@ -204,14 +225,17 @@ export async function transcribe(
     const diarizeName = chunked ? `diarize_chunk_${ch.index}.txt` : "diarize.txt";
     const text = await inter.cachedText(diarizeName, cache, async () => {
       const parts = [{ filePath: chunkAudio }, ...keyframePaths.map((p) => ({ filePath: p })), { text: prompt }];
-      const res = await gemini.generate(parts, {
-        model: llmModel,
-        temperature: 0.2,
-        maxOutputTokens: 65536,
-        thinkingLevel: llmThinkingLevel,
-        systemInstruction: DIARIZATION_SYSTEM,
-        label: chunked ? `diarize-chunk-${ch.index}` : "diarize",
-      });
+      const stageName = chunked ? `diarize-chunk-${ch.index}` : "diarize";
+      const res = await stage(stageName, () =>
+        gemini.generate(parts, {
+          model: llmModel,
+          temperature: 0.2,
+          maxOutputTokens: 65536,
+          thinkingLevel: llmThinkingLevel,
+          systemInstruction: DIARIZATION_SYSTEM,
+          label: stageName,
+        })
+      );
       inter.writeJSON(chunked ? `diarize_chunk_${ch.index}.meta.json` : "diarize.meta.json", { model: res.model, usage: res.usage });
       if (!res.text.trim()) throw new Error(`Diarization returned empty text${chunked ? ` (chunk ${ch.index})` : ""}`);
       return res.text;
@@ -262,6 +286,7 @@ export async function transcribe(
   const turns = allTurns;
 
   // 6. Identify / canonicalize speakers ---------------------------------
+  checkAbort();
   let resolvedNames: Record<string, string> | undefined;
   let descriptions: Record<string, string> | undefined;
   if (identifySpeakers && turns.length > 0) {
