@@ -20,40 +20,59 @@ npm versions must be unique per publish, so the two lines never collide:
 - **opus** uses an `-opus.N` prerelease so it can never accidentally become `latest`:
   `1.0.0-opus.0`, `1.0.0-opus.1`, … Bump the prerelease counter per opus publish.
 
-## Publish the primary (GLM → `latest` + `glm`)
+## How publishing works (npm Trusted Publishing / OIDC)
+
+Releases are published by `.github/workflows/publish.yml` using **npm Trusted Publishing**
+(OpenID Connect) — no `NPM_TOKEN` stored anywhere. The workflow detects the build from the
+package.json version at the released commit:
+
+- version `X.Y.Z`        → `npm publish` (→ `@latest`) + `npm dist-tag add … glm`
+- version `X.Y.Z-opus.N`  → `npm publish --tag opus`
+
+It runs with `id-token: write`, Node 24 + npm ≥ 11.5.1, `--provenance` (the repo is public),
+and no `NODE_AUTH_TOKEN`.
+
+### One-time bootstrap (required — OIDC cannot create a brand-new package)
+
+The package must exist on npm before a trusted publisher can be attached. Do this **once**,
+locally, signed in to the npm account that owns `offmute-v2` (with 2FA):
 
 ```bash
-git checkout glm
-npm ci
-npm run typecheck && npm run lint && npm test
-npm run build                 # tsup → dist/ (node + browser)
-npm publish                   # publishes the current version as @latest
-npm dist-tag add offmute-v2@$(node -p "require('./package.json').version") glm
+# 1) GLM build → claims the name, sets @latest and @glm
+git checkout glm && npm ci && npm run build
+npm publish --access public                                   # → @latest  (NO --provenance locally)
+npm dist-tag add "offmute-v2@$(node -p "require('./package.json').version")" glm
+
+# 2) Opus build → @opus
+git checkout opus && bun install && bun run build
+npm publish --access public --tag opus
 ```
 
-(`npm publish` tags `latest` by default; the second line also points `glm` at the same
-version, so `offmute-v2@glm` always tracks the primary build.)
+### Configure the trusted publisher (once, on npmjs.com)
 
-## Publish the secondary (Opus → `opus`)
+Packages → **offmute-v2** → Settings → **Trusted publishing** → GitHub Actions:
 
-```bash
-git checkout opus
-# bump version to the next 1.0.0-opus.N first
-npm ci && npm run build
-npm publish --tag opus        # never touches @latest because it's a prerelease + explicit tag
-```
+| Field | Value |
+|-------|-------|
+| Organization or user | `SouthBridgeAI` |
+| Repository | `offmute-v2` |
+| Workflow filename | `publish.yml` |
+| Environment | *(leave blank)* |
+
+Then set **Publishing access → "Require two-factor authentication and disallow tokens"** so the
+trusted workflow is the only automated path.
+
+### Every release after that
+
+1. Bump the version on the branch (`glm`: `1.0.1`; `opus`: `1.0.0-opus.1`), commit, push.
+2. Create a **GitHub Release** whose tag points at that commit.
+3. `publish.yml` runs and publishes with the right dist-tag + provenance.
 
 ## Verify
 
 ```bash
 npm dist-tag ls offmute-v2
-# expect: latest -> 1.0.0   glm -> 1.0.0   opus -> 1.0.0-opus.0
+# expect e.g.: latest -> 1.0.0   glm -> 1.0.0   opus -> 1.0.0-opus.0
 npx offmute-v2@glm --help
 npx offmute-v2@opus --help
 ```
-
-## GitHub
-
-After pushing, set the repo's **default branch to `glm`** in Settings → Branches. Keep `opus`
-as a long-lived branch (it shares no history with `glm` by design — it's a separate build, not a
-feature branch).
