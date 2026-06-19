@@ -11,8 +11,7 @@
     "url": "https://github.com/SouthBridgeAI/offmute-v2/issues"
   },
   "publishConfig": {
-    "access": "public",
-    "provenance": true
+    "access": "public"
   },
   "type": "module",
   "bin": {
