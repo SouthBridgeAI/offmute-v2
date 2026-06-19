@@ -4,7 +4,7 @@
  * merge → identify → format), including chunking for long media. Runs entirely in
  * the browser; keys are injected by the host.
  */
-import type { AsrResult, LlmLine, Transcript } from "./types.js";
+import type { AsrResult, LlmCallRecord, LlmLine, Transcript } from "./types.js";
 import type { FFmpegLike } from "./media/ffmpeg-wasm.js";
 import { extractAudioWasm, extractKeyframesWasm, writeInput } from "./media/ffmpeg-wasm.js";
 import { transcribeWithAssemblyAIFetch } from "./providers/assemblyai-fetch.js";
@@ -39,6 +39,8 @@ export interface TranscribeInBrowserOptions {
   chunkMinutes?: number;
   chunkOverlapMinutes?: number;
   onProgress?: (e: BrowserProgress) => void;
+  /** invoked once per LLM call with its prompt/response/usage (for inspection/debug) */
+  onLlmCall?: (rec: LlmCallRecord) => void;
 }
 
 export interface BrowserTranscribeResult {
@@ -110,6 +112,7 @@ export async function transcribeInBrowser(
 
   // 4-5. diarize (single-pass or chunked) + align
   const gem = new GeminiFetchClient(apiKeys.gemini);
+  if (options.onLlmCall) gem.onCall = options.onLlmCall;
   const maxSingleSec = (options.maxSinglePassMinutes ?? 35) * 60;
   const chunkSec = (options.chunkMinutes ?? 15) * 60;
   const overlapSec = (options.chunkOverlapMinutes ?? 2) * 60;
@@ -142,7 +145,7 @@ export async function transcribeInBrowser(
         ...keyframes.map((kf) => ({ data: { bytes: kf, mimeType: "image/jpeg" } })),
         { text: prompt },
       ],
-      { model: llmModel, temperature: 0.2, maxOutputTokens: 65536, thinkingLevel: llmThinkingLevel, systemInstruction: DIARIZATION_SYSTEM }
+      { model: llmModel, temperature: 0.2, maxOutputTokens: 65536, thinkingLevel: llmThinkingLevel, systemInstruction: DIARIZATION_SYSTEM, label: chunked ? `diarize-chunk-${ch.index}` : "diarize" }
     );
     if (!res.text.trim()) throw new Error(`Diarization returned empty text${chunked ? ` (chunk ${ch.index})` : ""}`);
 
@@ -177,7 +180,7 @@ export async function transcribeInBrowser(
   }));
 
   // 7. identify
-  let aliases: Record<string, string> | undefined;
+  let resolvedNames: Record<string, string> | undefined;
   let descriptions: Record<string, string> | undefined;
   if (identifySpeakers) {
     progress("identify", "Resolving speaker identities");
@@ -190,7 +193,7 @@ export async function transcribeInBrowser(
         llmModel,
         asrSpeakerByLabel: Object.keys(voiceDist).length ? voiceDist : undefined,
       });
-      aliases = ident.aliases;
+      resolvedNames = ident.resolvedNames;
       descriptions = ident.descriptions;
     } catch {
       /* keep raw labels */
@@ -210,7 +213,7 @@ export async function transcribeInBrowser(
       userInstructions: instructions,
       language: asr.language,
     },
-    { knownSpeakers, aliases, descriptions }
+    { knownSpeakers, resolvedNames, descriptions }
   );
 
   progress("done", `${transcript.segments.length} segments, ${transcript.speakers.length} speakers (${secondsToCompact(duration)})`);

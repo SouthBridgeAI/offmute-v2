@@ -5,6 +5,7 @@
  */
 import { withRetry } from "../core/retry.js";
 import { resolveThinkingConfig, isThinkingConfigError } from "./thinking.js";
+import type { LlmCallRecord } from "../types.js";
 
 const DEFAULT_BASE = "https://generativelanguage.googleapis.com";
 
@@ -36,6 +37,8 @@ export interface GeminiFetchOptions {
   retries?: number;
   /** JSON schema for structured output */
   schema?: unknown;
+  /** label for this call, surfaced in onCall */
+  label?: string;
 }
 
 export interface GeminiFetchResult {
@@ -67,6 +70,8 @@ async function fetchOk(url: string, init: RequestInit): Promise<Response> {
 export class GeminiFetchClient {
   private key: string;
   private base: string;
+  /** if set, invoked once per generate() with the prompt/response/usage (for logging). */
+  onCall?: (rec: LlmCallRecord) => void;
   constructor(apiKey?: string, baseUrl: string = DEFAULT_BASE) {
     const env = typeof process !== "undefined" ? process.env : undefined;
     const key = apiKey ?? env?.["GEMINI_API_KEY"] ?? env?.["GOOGLE_API_KEY"];
@@ -187,12 +192,16 @@ export class GeminiFetchClient {
       };
       const text = (resp.candidates?.[0]?.content?.parts ?? []).map((p) => p.text ?? "").join("");
       const u = resp.usageMetadata;
-      return {
-        text,
-        usage: { inputTokens: u?.promptTokenCount, outputTokens: u?.candidatesTokenCount, thoughtsTokens: u?.thoughtsTokenCount },
+      const usage = { inputTokens: u?.promptTokenCount, outputTokens: u?.candidatesTokenCount, thoughtsTokens: u?.thoughtsTokenCount };
+      this.onCall?.({
+        label: options.label,
         model,
-        raw: resp,
-      };
+        promptText: parts.filter((p) => p.text !== undefined).map((p) => p.text).join("\n"),
+        fileParts: parts.filter((p) => p.data || p.uploaded).length,
+        responseText: text,
+        usage,
+      });
+      return { text, usage, model, raw: resp };
     } finally {
       await Promise.all(cleanup.map((n) => this.deleteFile(n)));
     }

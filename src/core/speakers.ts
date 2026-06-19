@@ -20,8 +20,8 @@ export function isProvisional(label: string): boolean {
 export interface BuildSpeakersOptions {
   /** explicit canonical name per raw label (overrides) */
   knownSpeakers?: Record<string, string>;
-  /** alias map: raw label -> canonical label (e.g. {"Speaker 1": "Rishi"}) from identify pass */
-  aliases?: Record<string, string>;
+  /** resolved-name map: raw label -> identified name (e.g. {"Speaker 1": "Rishi"}) from the identify pass */
+  resolvedNames?: Record<string, string>;
   /** descriptions per canonical label */
   descriptions?: Record<string, string>;
 }
@@ -34,10 +34,10 @@ export interface BuiltSpeakers {
 
 /**
  * Build canonical speakers from the raw turn labels (in order of first appearance).
- * Applies aliases (merge provisional labels into a name) and known-speaker overrides.
+ * Applies resolvedNames (merge provisional labels into a name) and known-speaker overrides.
  */
 export function buildSpeakers(rawLabels: string[], options: BuildSpeakersOptions = {}): BuiltSpeakers {
-  const { knownSpeakers = {}, aliases = {}, descriptions = {} } = options;
+  const { knownSpeakers = {}, resolvedNames = {}, descriptions = {} } = options;
 
   const labelToId = new Map<string, string>();
   const byId = new Map<string, Speaker>();
@@ -45,10 +45,10 @@ export function buildSpeakers(rawLabels: string[], options: BuildSpeakersOptions
   const resolveCanonical = (raw: string): string => {
     // 1. explicit known-speaker name
     if (knownSpeakers[raw]) return knownSpeakers[raw]!;
-    // 2. alias (merge) — may chain once
-    if (aliases[raw]) {
-      const aliased = aliases[raw]!;
-      return knownSpeakers[aliased] ?? aliased;
+    // 2. identify-resolved name (merges a provisional label into its real name) — may chain once
+    if (resolvedNames[raw]) {
+      const resolvedName = resolvedNames[raw]!;
+      return knownSpeakers[resolvedName] ?? resolvedName;
     }
     return raw;
   };

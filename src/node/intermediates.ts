@@ -1,7 +1,7 @@
 /** Node-only: hash-keyed intermediates for resume + debugging. */
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 /**
  * Fast media identity key: path + size + mtime (not full-content hash — a 9.6GB
@@ -21,6 +21,13 @@ export class Intermediates {
     return join(this.dir, name);
   }
 
+  /** Resolve a name to a path, ensuring its parent dir exists (supports "sub/dir/file"). */
+  private ensurePath(name: string): string {
+    const p = this.path(name);
+    mkdirSync(dirname(p), { recursive: true });
+    return p;
+  }
+
   has(name: string): boolean {
     return existsSync(this.path(name));
   }
@@ -36,7 +43,7 @@ export class Intermediates {
   }
 
   writeJSON(name: string, data: unknown): void {
-    writeFileSync(this.path(name), JSON.stringify(data, null, 2));
+    writeFileSync(this.ensurePath(name), JSON.stringify(data, null, 2));
   }
 
   readText(name: string): string | null {
@@ -45,7 +52,7 @@ export class Intermediates {
   }
 
   writeText(name: string, data: string): void {
-    writeFileSync(this.path(name), data);
+    writeFileSync(this.ensurePath(name), data);
   }
 
   /** Run `producer` unless a cached JSON exists (and cache is enabled). */

@@ -74,7 +74,7 @@ export function alignTurnsToSegments(
 
 export interface AssembleOptions {
   knownSpeakers?: Record<string, string>;
-  aliases?: Record<string, string>;
+  resolvedNames?: Record<string, string>;
   descriptions?: Record<string, string>;
 }
 
@@ -84,10 +84,10 @@ export function buildTranscript(
   metadata: TranscriptMetadata,
   options: AssembleOptions = {}
 ): Transcript {
-  const { knownSpeakers, aliases, descriptions } = options;
+  const { knownSpeakers, resolvedNames, descriptions } = options;
   const { speakers, labelToId } = buildSpeakers(
     segments.map((s) => s.speakerLabel),
-    { knownSpeakers, aliases, descriptions }
+    { knownSpeakers, resolvedNames, descriptions }
   );
 
   const transcriptSegments: TranscriptSegment[] = segments.map((s, i) => ({
@@ -106,7 +106,7 @@ export function buildTranscript(
 
 /**
  * Convenience: align + build in one call (single-window; no provider calls).
- * For browser single-pass use. `aliases`/`descriptions` (from a prior identify
+ * For browser single-pass use. `resolvedNames`/`descriptions` (from a prior identify
  * pass) can be supplied via options.
  */
 export function assembleTranscript(

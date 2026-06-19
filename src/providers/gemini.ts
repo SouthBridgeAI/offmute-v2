@@ -6,6 +6,7 @@ import { GoogleGenAI } from "@google/genai";
 import { basename, extname } from "node:path";
 import { withRetry } from "../core/retry.js";
 import { resolveThinkingConfig, isThinkingConfigError } from "./thinking.js";
+import type { LlmCallRecord } from "../types.js";
 
 const MIME_BY_EXT: Record<string, string> = {
   ".mp3": "audio/mp3",
@@ -73,6 +74,8 @@ export interface GeminiOptions {
   thinkingLevel?: "MINIMAL" | "LOW" | "MEDIUM" | "HIGH";
   /** retries on transient API errors (default 4) */
   retries?: number;
+  /** label for this call, surfaced in the onCall log record */
+  label?: string;
 }
 
 export interface GeminiResult {
@@ -84,6 +87,8 @@ export interface GeminiResult {
 
 export class GeminiClient {
   private ai: GoogleGenAI;
+  /** if set, invoked once per generate() with the prompt/response/usage (for logging). */
+  onCall?: (rec: LlmCallRecord) => void;
   constructor(apiKey?: string) {
     const key = apiKey ?? process.env.GEMINI_API_KEY ?? process.env.GOOGLE_API_KEY;
     if (!key) throw new Error("Missing GEMINI_API_KEY / GOOGLE_API_KEY");
@@ -149,6 +154,8 @@ export class GeminiClient {
 
     const call = (cfg: Record<string, unknown>) =>
       this.ai.models.generateContent({ model, contents: [{ role: "user", parts: builtParts as never }], config: cfg });
+    const promptText = parts.filter((p) => p.text !== undefined).map((p) => p.text).join("\n");
+    const fileParts = parts.filter((p) => p.filePath || p.uploaded).length;
 
     try {
       let resp;
@@ -161,11 +168,12 @@ export class GeminiClient {
           const { thinkingConfig: _drop, ...rest } = config;
           resp = await retry(() => call(rest), `generate ${model} (no-thinking)`, options.retries ?? 4);
         } else {
+          this.onCall?.({ label: options.label, model, promptText, fileParts, responseText: "", error: (err as Error)?.message ?? String(err) });
           throw err;
         }
       }
       const usage = (resp as { usageMetadata?: { promptTokenCount?: number; candidatesTokenCount?: number; thoughtsTokenCount?: number } }).usageMetadata;
-      return {
+      const result: GeminiResult = {
         text: resp.text ?? "",
         usage: {
           inputTokens: usage?.promptTokenCount,
@@ -175,6 +183,8 @@ export class GeminiClient {
         model,
         raw: resp,
       };
+      this.onCall?.({ label: options.label, model, promptText, fileParts, responseText: result.text, usage: result.usage });
+      return result;
     } finally {
       // best-effort cleanup of files we uploaded here
       await Promise.all(toCleanup.map((n) => this.deleteFile(n)));

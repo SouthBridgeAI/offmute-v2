@@ -16,13 +16,42 @@ export interface TextGenerator {
       systemInstruction?: string;
       thinkingBudget?: number;
       thinkingLevel?: "MINIMAL" | "LOW" | "MEDIUM" | "HIGH";
+      /** JSON schema → structured-output (JSON) mode */
+      schema?: unknown;
+      /** label for call logging */
+      label?: string;
     }
   ): Promise<{ text: string }>;
 }
 
+/**
+ * Response schema for the identify pass. With JSON mode the model is constrained to
+ * this shape, so the output is valid JSON (no code fences / prose to strip). We still
+ * keep the lenient parser as a fallback in case a model ignores the schema.
+ * (Gemini's responseSchema uses uppercase OpenAPI types.)
+ */
+export const IDENTIFY_SCHEMA = {
+  type: "OBJECT",
+  properties: {
+    speakers: {
+      type: "ARRAY",
+      items: {
+        type: "OBJECT",
+        properties: {
+          rawLabels: { type: "ARRAY", items: { type: "STRING" } },
+          name: { type: "STRING" },
+          description: { type: "STRING" },
+        },
+        required: ["rawLabels", "name"],
+      },
+    },
+  },
+  required: ["speakers"],
+} as const;
+
 export interface IdentifyResult {
   /** raw turn label -> canonical name */
-  aliases: Record<string, string>;
+  resolvedNames: Record<string, string>;
   /** canonical name -> description/role */
   descriptions: Record<string, string>;
 }
@@ -123,16 +152,18 @@ export async function identifySpeakersLLM(
     temperature: 0,
     maxOutputTokens: 16384,
     thinkingLevel: "MINIMAL",
+    schema: IDENTIFY_SCHEMA,
+    label: "identify",
   });
   const parsed = parseIdentifyJson(res.text);
-  const aliases: Record<string, string> = {};
+  const resolvedNames: Record<string, string> = {};
   const descriptions: Record<string, string> = {};
   if (parsed) {
     for (const sp of parsed.speakers) {
       if (!sp.name) continue;
-      for (const raw of sp.rawLabels ?? []) aliases[raw] = sp.name;
+      for (const raw of sp.rawLabels ?? []) resolvedNames[raw] = sp.name;
       if (sp.description) descriptions[sp.name] = sp.description;
     }
   }
-  return { aliases, descriptions };
+  return { resolvedNames, descriptions };
 }

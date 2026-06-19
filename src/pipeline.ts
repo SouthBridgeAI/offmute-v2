@@ -4,7 +4,7 @@
  */
 import { basename, dirname, extname, join } from "node:path";
 import { existsSync } from "node:fs";
-import type { AsrResult, LlmLine, Transcript } from "./types.js";
+import type { AsrResult, LlmCallRecord, LlmLine, Transcript } from "./types.js";
 import { probeMedia, extractAudio, extractKeyframes } from "./media/ffmpeg.js";
 import { transcribeWithAssemblyAI } from "./providers/assemblyai.js";
 import { GeminiClient } from "./providers/gemini.js";
@@ -40,6 +40,10 @@ export interface TranscribeOptions {
   intermediatesDir?: string;
   cache?: boolean;
   onProgress?: (e: ProgressEvent) => void;
+  /** invoked once per LLM call with its prompt/response/usage (for inspection/debug) */
+  onLlmCall?: (rec: LlmCallRecord) => void;
+  /** write every LLM call (prompt + response) to intermediates/llm/ (default true) */
+  logLlm?: boolean;
   apiKeys?: { gemini?: string; assemblyai?: string };
   /** force chunking threshold in minutes (default 35; longer files are chunked) */
   maxSinglePassMinutes?: number;
@@ -74,6 +78,7 @@ export async function transcribe(
     identifySpeakers = true,
     knownSpeakers,
     cache = true,
+    logLlm = true,
     onProgress,
     apiKeys,
   } = options;
@@ -144,6 +149,18 @@ export async function transcribe(
 
   // 4-5. Diarize (single-pass or chunked) + align -----------------------
   const gemini = new GeminiClient(apiKeys?.gemini);
+  // Log every LLM call (prompt + response + usage) to intermediates/llm/ for inspection.
+  let llmSeq = 0;
+  gemini.onCall = (rec) => {
+    options.onLlmCall?.(rec);
+    if (logLlm) {
+      const n = String(llmSeq++).padStart(2, "0");
+      const stem = `llm/${n}-${rec.label ?? "call"}`;
+      inter.writeText(`${stem}.prompt.txt`, rec.promptText + (rec.fileParts ? `\n\n[+${rec.fileParts} file part(s)]` : ""));
+      inter.writeText(`${stem}.response.txt`, rec.responseText || `[error] ${rec.error ?? "unknown"}`);
+      inter.writeJSON(`${stem}.meta.json`, { model: rec.model, label: rec.label, usage: rec.usage, fileParts: rec.fileParts, error: rec.error });
+    }
+  };
   const maxSingleSec = (options.maxSinglePassMinutes ?? 35) * 60;
   const chunkSec = (options.chunkMinutes ?? 15) * 60;
   const overlapSec = (options.chunkOverlapMinutes ?? 2) * 60;
@@ -193,6 +210,7 @@ export async function transcribe(
         maxOutputTokens: 65536,
         thinkingLevel: llmThinkingLevel,
         systemInstruction: DIARIZATION_SYSTEM,
+        label: chunked ? `diarize-chunk-${ch.index}` : "diarize",
       });
       inter.writeJSON(chunked ? `diarize_chunk_${ch.index}.meta.json` : "diarize.meta.json", { model: res.model, usage: res.usage });
       if (!res.text.trim()) throw new Error(`Diarization returned empty text${chunked ? ` (chunk ${ch.index})` : ""}`);
@@ -200,6 +218,8 @@ export async function transcribe(
     });
 
     const turns = parseDiarizedText(text);
+    // Save the parsed turns next to the raw output so raw→parsed is inspectable.
+    inter.writeJSON(chunked ? `diarize_chunk_${ch.index}.parsed.json` : "diarize.parsed.json", turns);
     previousTail = turns.slice(-3).map((t) => `${t.speaker}: ${t.text}`).join("\n");
     // The prompt asks for chunk-RELATIVE timestamps; make them absolute so the
     // no-ASR fallback (which uses approxStart) orders turns correctly across chunks.
@@ -242,7 +262,7 @@ export async function transcribe(
   const turns = allTurns;
 
   // 6. Identify / canonicalize speakers ---------------------------------
-  let aliases: Record<string, string> | undefined;
+  let resolvedNames: Record<string, string> | undefined;
   let descriptions: Record<string, string> | undefined;
   if (identifySpeakers && turns.length > 0) {
     progress("identify", "Resolving speaker identities");
@@ -251,7 +271,7 @@ export async function transcribe(
       const ident = await inter.cachedJSON("identify.json", cache, () =>
         identifySpeakersLLM(gemini, turns, { instructions, llmModel, asrSpeakerByLabel: voiceHint })
       );
-      aliases = ident.aliases;
+      resolvedNames = ident.resolvedNames;
       descriptions = ident.descriptions;
     } catch (e) {
       progress("identify", `Identify pass failed, using raw labels: ${(e as Error).message}`);
@@ -270,7 +290,7 @@ export async function transcribe(
       userInstructions: instructions,
       language: asr?.language,
     },
-    { knownSpeakers, aliases, descriptions }
+    { knownSpeakers, resolvedNames, descriptions }
   );
 
   // 8. Format + persist --------------------------------------------------

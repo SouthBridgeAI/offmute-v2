@@ -105,6 +105,20 @@ export interface TranscriptSegment {
   alignmentConfidence?: number;
 }
 
+/** A record of one LLM call, for debugging/inspection (prompt + response + usage). */
+export interface LlmCallRecord {
+  /** which stage made the call, e.g. "diarize", "diarize-chunk-2", "identify" */
+  label?: string;
+  model: string;
+  /** the text portion(s) of the prompt (files are noted, not inlined) */
+  promptText: string;
+  /** number of non-text (file/image) parts sent */
+  fileParts?: number;
+  responseText: string;
+  usage?: { inputTokens?: number; outputTokens?: number; thoughtsTokens?: number };
+  error?: string;
+}
+
 export interface TranscriptMetadata {
   source: string;
   durationSeconds: number;
