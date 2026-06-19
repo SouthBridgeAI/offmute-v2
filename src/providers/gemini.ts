@@ -5,6 +5,7 @@
 import { GoogleGenAI } from "@google/genai";
 import { basename, extname } from "node:path";
 import { withRetry } from "../core/retry.js";
+import { resolveThinkingConfig, isThinkingConfigError } from "./thinking.js";
 
 const MIME_BY_EXT: Record<string, string> = {
   ".mp3": "audio/mp3",
@@ -142,24 +143,27 @@ export class GeminiClient {
       config["responseMimeType"] = "application/json";
       config["responseSchema"] = options.schema;
     }
-    // Gemini 3.x honors thinkingLevel; 2.5 honors thinkingBudget. Prefer level if given.
-    if (options.thinkingLevel) {
-      config["thinkingConfig"] = { thinkingLevel: options.thinkingLevel };
-    } else if (options.thinkingBudget !== undefined) {
-      config["thinkingConfig"] = { thinkingBudget: options.thinkingBudget };
-    }
+    // Model-aware thinking config (2.5→budget, 3.x-flash→level, 3.x-pro→no MINIMAL).
+    const thinking = resolveThinkingConfig(model, options.thinkingLevel, options.thinkingBudget);
+    if (thinking) config["thinkingConfig"] = thinking;
+
+    const call = (cfg: Record<string, unknown>) =>
+      this.ai.models.generateContent({ model, contents: [{ role: "user", parts: builtParts as never }], config: cfg });
 
     try {
-      const resp = await retry(
-        () =>
-          this.ai.models.generateContent({
-            model,
-            contents: [{ role: "user", parts: builtParts as never }],
-            config,
-          }),
-        `generate ${model}`,
-        options.retries ?? 4
-      );
+      let resp;
+      try {
+        resp = await retry(() => call(config), `generate ${model}`, options.retries ?? 4);
+      } catch (err) {
+        // A model rejected the thinking config (compatibility varies) — drop it and retry.
+        if (isThinkingConfigError(err) && config["thinkingConfig"]) {
+          process.stderr.write(`\n  [thinking config unsupported for ${model}; retrying without it]`);
+          const { thinkingConfig: _drop, ...rest } = config;
+          resp = await retry(() => call(rest), `generate ${model} (no-thinking)`, options.retries ?? 4);
+        } else {
+          throw err;
+        }
+      }
       const usage = (resp as { usageMetadata?: { promptTokenCount?: number; candidatesTokenCount?: number; thoughtsTokenCount?: number } }).usageMetadata;
       return {
         text: resp.text ?? "",

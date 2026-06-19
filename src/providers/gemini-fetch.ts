@@ -4,6 +4,7 @@
  * API resumable protocol and calls generateContent over REST.
  */
 import { withRetry } from "../core/retry.js";
+import { resolveThinkingConfig, isThinkingConfigError } from "./thinking.js";
 
 const DEFAULT_BASE = "https://generativelanguage.googleapis.com";
 
@@ -145,29 +146,42 @@ export class GeminiFetchClient {
 
     const generationConfig: Record<string, unknown> = { temperature: options.temperature ?? 0.2 };
     if (options.maxOutputTokens) generationConfig["maxOutputTokens"] = options.maxOutputTokens;
-    if (options.thinkingLevel) generationConfig["thinkingConfig"] = { thinkingLevel: options.thinkingLevel };
-    else if (options.thinkingBudget !== undefined) generationConfig["thinkingConfig"] = { thinkingBudget: options.thinkingBudget };
+    const thinking = resolveThinkingConfig(model, options.thinkingLevel, options.thinkingBudget);
+    if (thinking) generationConfig["thinkingConfig"] = thinking;
     if (options.schema) {
       generationConfig["responseMimeType"] = "application/json";
       generationConfig["responseSchema"] = options.schema;
     }
 
-    const body: Record<string, unknown> = {
-      contents: [{ role: "user", parts: built }],
-      generationConfig,
+    const makeBody = (genCfg: Record<string, unknown>): Record<string, unknown> => {
+      const b: Record<string, unknown> = { contents: [{ role: "user", parts: built }], generationConfig: genCfg };
+      if (options.systemInstruction) b["systemInstruction"] = { parts: [{ text: options.systemInstruction }] };
+      return b;
     };
-    if (options.systemInstruction) body["systemInstruction"] = { parts: [{ text: options.systemInstruction }] };
-
-    try {
-      const resp = (await withRetry(
+    const callJson = (genCfg: Record<string, unknown>) =>
+      withRetry(
         () =>
           fetchOk(`${this.base}/v1beta/models/${model}:generateContent?key=${this.key}`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(body),
+            body: JSON.stringify(makeBody(genCfg)),
           }).then((r) => r.json()),
         { retries: options.retries ?? 4 }
-      )) as {
+      );
+
+    try {
+      let resp;
+      try {
+        resp = await callJson(generationConfig);
+      } catch (err) {
+        if (isThinkingConfigError(err) && generationConfig["thinkingConfig"]) {
+          const { thinkingConfig: _drop, ...rest } = generationConfig;
+          resp = await callJson(rest);
+        } else {
+          throw err;
+        }
+      }
+      resp = resp as {
         candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
         usageMetadata?: { promptTokenCount?: number; candidatesTokenCount?: number; thoughtsTokenCount?: number };
       };

@@ -3,6 +3,7 @@ import { test, expect, describe } from "bun:test";
 import { secondsToSrtTime } from "../core/time.js";
 import { splitSpeakerPrefix, parseSrt } from "../core/srt.js";
 import { calculateChunks, chunkOwnership, mergeChunkSegments, type MergeableSegment } from "../core/chunk.js";
+import { resolveThinkingConfig, isThinkingConfigError } from "../providers/thinking.js";
 
 describe("secondsToSrtTime hardening (#8)", () => {
   test("non-finite input yields zero time, not NaN", () => {
@@ -41,6 +42,29 @@ describe("calculateChunks config clamp (#3)", () => {
       expect(chunks[i]!.startSeconds).toBeLessThanOrEqual(chunks[i - 1]!.endSeconds);
     }
     expect(chunks[chunks.length - 1]!.endSeconds).toBe(3600);
+  });
+});
+
+describe("resolveThinkingConfig (model thinking compatibility — errors 2 & 3)", () => {
+  test("2.5 → thinkingBudget (level unsupported); pro floors at 128, flash disables", () => {
+    expect(resolveThinkingConfig("gemini-2.5-pro", "MINIMAL")).toEqual({ thinkingBudget: 128 });
+    expect(resolveThinkingConfig("gemini-2.5-flash", "MINIMAL")).toEqual({ thinkingBudget: 0 });
+  });
+  test("3.x pro rejects MINIMAL → floored to LOW; flash keeps MINIMAL", () => {
+    expect(resolveThinkingConfig("gemini-3.1-pro-preview", "MINIMAL")).toEqual({ thinkingLevel: "LOW" });
+    expect(resolveThinkingConfig("gemini-pro-latest", "MINIMAL")).toEqual({ thinkingLevel: "LOW" });
+    expect(resolveThinkingConfig("gemini-flash-latest", "MINIMAL")).toEqual({ thinkingLevel: "MINIMAL" });
+  });
+  test("2.0 has no thinking control", () => {
+    expect(resolveThinkingConfig("gemini-2.0-flash", "MINIMAL")).toBeUndefined();
+  });
+});
+
+describe("isThinkingConfigError", () => {
+  test("matches the real API messages from review", () => {
+    expect(isThinkingConfigError(new Error("Thinking level is not supported for this model."))).toBe(true);
+    expect(isThinkingConfigError(new Error("Thinking level MINIMAL is not supported for this model."))).toBe(true);
+    expect(isThinkingConfigError(new Error("Some unrelated 400 error"))).toBe(false);
   });
 });
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { Command } from "commander";
 import { basename, extname, join, resolve } from "node:path";
-import { writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { transcribe, type ProgressEvent } from "./pipeline.js";
 
 const program = new Command();
@@ -25,13 +25,34 @@ program
   .option("-f, --format <fmt>", "output format: srt | md | json | text | all", "all")
   .action(async (input: string, opts) => {
     const start = Date.now();
-    let lastStage = "";
+    const base = basename(input, extname(input));
+    const outDir = resolve(opts.out);
+    // Fail fast on a bad output dir, and create it so we don't crash AFTER all the
+    // expensive work. Keep intermediates WITH the output (not next to the input).
+    try {
+      mkdirSync(outDir, { recursive: true });
+    } catch (e) {
+      console.error(`✗ Cannot create output directory ${outDir}: ${(e as Error).message}`);
+      process.exit(1);
+    }
+    const intermediatesDir = opts.intermediatesDir ? resolve(opts.intermediatesDir) : join(outDir, `.offmute_${base}`);
+
+    // Live, updating elapsed-time line per stage (so long stages don't look frozen).
+    let stage = "";
+    let msg = "";
+    const elapsed = () => ((Date.now() - start) / 1000).toFixed(0);
+    const render = () => process.stderr.write(`\r[${elapsed()}s] ${stage}: ${msg}[K`);
     const onProgress = (e: ProgressEvent) => {
-      const t = ((Date.now() - start) / 1000).toFixed(1);
-      if (e.stage !== lastStage) process.stderr.write(`\n[${t}s] ${e.stage}: ${e.message}`);
-      else process.stderr.write(` · ${e.message}`);
-      lastStage = e.stage;
+      if (e.stage !== stage) {
+        if (stage) process.stderr.write("\n");
+        stage = e.stage;
+        msg = e.message;
+      } else {
+        msg = msg ? `${msg} · ${e.message}` : e.message;
+      }
+      render();
     };
+    const ticker = setInterval(render, 1000);
 
     try {
       const result = await transcribe(resolve(input), {
@@ -44,13 +65,12 @@ program
         subSegment: opts.subSegment,
         identifySpeakers: opts.identify,
         llmThinkingLevel: opts.thinkingLevel,
-        intermediatesDir: opts.intermediatesDir,
+        intermediatesDir,
         cache: opts.cache,
         onProgress,
       });
+      clearInterval(ticker);
 
-      const base = basename(input, extname(input));
-      const outDir = resolve(opts.out);
       const want = (f: string) => opts.format === "all" || opts.format === f;
       const written: string[] = [];
       if (want("srt")) {
@@ -76,6 +96,7 @@ program
       for (const p of written) console.log(`  → ${p}`);
       console.log(`  Intermediates: ${result.intermediatesDir}`);
     } catch (err) {
+      clearInterval(ticker);
       process.stderr.write("\n");
       console.error(`✗ ${(err as Error).message}`);
       process.exit(1);

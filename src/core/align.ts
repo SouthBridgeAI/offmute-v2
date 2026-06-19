@@ -32,12 +32,16 @@ export interface AlignPair {
 }
 
 /**
- * Global sequence alignment (Needleman–Wunsch) on normalized tokens.
- * Returns the alignment path as a list of pairs. O(n*m) time/space — fine for
- * chunk-sized inputs (a few thousand tokens). For whole-file we align per chunk.
+ * Global sequence alignment (Needleman–Wunsch) on normalized tokens — the textbook
+ * O(n·m) DP: initialise the first row/column with cumulative gap penalties, fill
+ * each cell with max(diag ± match/mismatch, up − gap, left − gap), then trace back
+ * from (n,m) to (0,0). Returns the alignment path as a list of pairs.
  *
- * To bound cost on large inputs we use a Hirschberg-free banded variant: if both
- * inputs are long and similar length, we still run full DP but with Int32 arrays.
+ * Score/backpointer matrices are flat Int32Array/Uint8Array (compact, ~5 bytes per
+ * cell) but it is still full O(n·m) memory — there is NO banding/Hirschberg here.
+ * That is fine per chunk (a few thousand tokens each); whole-file alignment is done
+ * per chunk to keep n·m bounded. (If single-shot alignment of very long inputs is
+ * ever needed, add a banded or Hirschberg variant.)
  */
 export function alignTokens(a: string[], b: string[]): AlignPair[] {
   const n = a.length;
