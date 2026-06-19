@@ -42,6 +42,9 @@ export {
   AssemblyAIFetchClient,
   OpenAICompatClient,
 };
+// In-browser preprocessing via ffmpeg.wasm (optional peer dep; browser-only).
+export { preprocessInBrowser } from "./browser-ffmpeg.js";
+export type { BrowserPreprocessResult, FfmpegWasmOptions } from "./browser-ffmpeg.js";
 export type { Segment, TranscriptResult, SpeakerInfo };
 
 export interface TranscribeBrowserOptions {

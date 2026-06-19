@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>offmute-v2 — in-browser demo</title>
+    <style>
+      body { font: 14px/1.5 system-ui, sans-serif; max-width: 900px; margin: 2rem auto; padding: 0 1rem; }
+      pre { background: #f4f4f5; padding: 1rem; overflow: auto; white-space: pre-wrap; border-radius: 6px; }
+      .row { margin: 1rem 0; }
+      input[type=file], button { font: inherit; padding: 0.4rem 0.6rem; }
+      .note { color: #666; font-size: 0.85em; }
+      .err { color: #b00; }
+    </style>
+  </head>
+  <body>
+    <h1>offmute-v2 — in-browser demo</h1>
+    <p class="note">
+      Drops a media file, extracts audio with <code>ffmpeg.wasm</code>, then runs the full
+      pipeline in-browser: Gemini (inline) for content/diarization/tone, AssemblyAI for
+      timestamps, edit-distance alignment, consistency, finalize. Requires
+      <code>GEMINI_API_KEY</code> and <code>ASSEMBLYAI_API_KEY</code> below.
+    </p>
+    <p class="note">
+      ⚠️ The pure core is verified; ffmpeg.wasm execution must be confirmed in your browser
+      (it fetches ~30MB of wasm core from a CDN on first run). Best for audio that fits
+      Gemini's inline limit (~20MB) — for longer files, use <code>preprocessInBrowser</code>'s
+      per-chunk output with the exported per-stage functions.
+    </p>
+
+    <div class="row">
+      <label>Gemini key <input id="geminiKey" type="password" size="30" /></label>
+      &nbsp;
+      <label>AssemblyAI key <input id="aaiKey" type="password" size="30" /></label>
+    </div>
+    <div class="row">
+      <input id="file" type="file" accept="audio/*,video/*" />
+      <button id="run">Transcribe in browser</button>
+    </div>
+    <div id="status" class="note"></div>
+    <pre id="out"></pre>
+
+    <!-- Install the optional peer deps + the browser bundle, e.g. via your bundler.
+         For a no-build demo we load them from a CDN. -->
+    <script type="importmap">
+      {
+        "imports": {
+          "@ffmpeg/ffmpeg": "https://esm.sh/@ffmpeg/ffmpeg@0.12.10",
+          "@ffmpeg/util": "https://esm.sh/@ffmpeg/util@0.12.10",
+          "offmute-v2/browser": "./dist/browser.browser.js"
+        }
+      }
+    </script>
+    <script type="module">
+      import { preprocessInBrowser, transcribeBrowser, formatSrt } from "offmute-v2/browser";
+
+      const $ = (id) => document.getElementById(id);
+      const status = (m) => ($("status").textContent = m);
+      const plan = (dur, chunkDur = 600, overlap = 60) => {
+        const out = [];
+        let start = 0, i = 0;
+        while (start < dur) {
+          const end = Math.min(start + chunkDur, dur);
+          out.push({ index: i, start, end, overlapWithPrevious: i === 0 ? 0 : overlap, trustedStart: i === 0 ? 0 : start + overlap });
+          start = end - overlap; i++;
+        }
+        return out;
+      };
+
+      $("run").onclick = async () => {
+        const file = $("file").files[0];
+        const geminiKey = $("geminiKey").value;
+        const aaiKey = $("aaiKey").value;
+        if (!file || !geminiKey || !aaiKey) { status("Provide a file and both keys."); return; }
+        try {
+          status("Loading ffmpeg.wasm + extracting audio… (first run downloads ~30MB)");
+          // Probe duration cheaply via an <audio>/<video> element to plan chunks.
+          const dur = await new Promise((res) => {
+            const el = document.createElement(file.type.includes("video") ? "video" : "audio");
+            el.preload = "metadata";
+            el.onloadedmetadata = () => res(el.duration || 600);
+            el.onerror = () => res(600);
+            el.src = URL.createObjectURL(file);
+          });
+          const { audio } = await preprocessInBrowser(file, plan(dur), { isVideo: file.type.includes("video"), keyframeCount: 0 });
+
+          status("Transcribing (Gemini inline + AssemblyAI + align)…");
+          const result = await transcribeBrowser({
+            audio,
+            geminiApiKey: geminiKey,
+            assemblyaiApiKey: aaiKey,
+            model: "gemini-2.5-flash",
+            level: 2,
+          });
+          $("out").textContent = formatSrt(result);
+          status(`Done — ${result.segments.length} segments.`);
+        } catch (e) {
+          $("status").classList.add("err");
+          status("Error: " + (e?.message || e));
+          console.error(e);
+        }
+      };
+    </script>
+  </body>
+</html>
