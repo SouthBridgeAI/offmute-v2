@@ -295,3 +295,19 @@ Mostly "explain", some "fix". Fixes:
 Explanations (now also in `docs/review-2/review-fixes.md` + code comments): words(flat, alignment substrate) vs utterances(grouped, prompt/display); `AsrUtterance.words?` optional because alignment uses top-level words; generics only where they pay (cache); tone = pass-through regex group; buildVoiceHint = count→% voice-anchor for identify; intermediates folder = resume/debug cache, NOT in-run state (data IS passed in memory within a run).
 
 40 tests green; tsc strict clean; dist rebuilt (verified). Repo hygiene: confirmed no media/dist/node_modules tracked.
+
+---
+
+## 2026-06-19 — Entry 10: Comparison-review upgrades (GLM vs Opus)
+
+Comparative review picked GLM as primary (readability/conventions); this build = `@opus`. Most Opus cons were already fixed in reviews 1–2. Open items I implemented:
+
+- **🔴 source-signature cache invalidation** — the review's #1 lesson: both builds' worst bug was in caching (GLM silently served a stale wrong transcript). My build shared the CLASS — `mediaKey()` existed but was UNUSED; cache gated only by existsSync. Fix: write `source.json` = mediaKey(path+size+mtime) + output-affecting config (model/instructions/thinkingLevel/asr/subSegment/identify); mismatch → disable cache for the run. Verified: 2 different files → 1 shared intermediates dir → 2nd re-runs ("input/config changed"), returns its OWN transcript; same input → cached (resume intact). Closes the silent-wrong-output class.
+- **DRY orchestration** — review's biggest engineering criticism (~80% duplicated chunk-loop). Extracted `core/orchestrate.ts` (`orchestrateChunks`, browser-safe); both pipelines inject only `diarizeChunk`+`onChunk`. Verified NO behavior change (single 8.1%/0.04s, chunked 7.7%/0.05s byte-identical).
+- **Live partial output** — `onChunk` writes `transcript.partial.srt` per chunk (+ diarize.parsed.json). Addresses "folder empty until end / stop path."
+- **Spec drift** — wired the CLI `text` format (was advertised, not wired); removed dead `description` plumbing (redundant — keyframes go directly to each diarize call); corrected SPEC (passes/best-so-far → explicit NOT-implemented; bundle ~49KB; real config surface).
+
+Agreed-with, no change: Part 4's WER re-score (engines ~equal; my raw edge was half GLM's dedup bug + GLM's more-verbatim style). Ownership merge gives me few near-dups (6 vs 24) — correct, not a claimed win.
+NOT implemented (honest): multi-pass refinement, full stop-and-emit-best-so-far, batch.
+
+40 tests green; dist rebuilt + verified (signature + orchestrate + prior fixes); browser bundle pure (0 node/SDK), ~52KB.

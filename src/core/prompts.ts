@@ -14,8 +14,6 @@ import { secondsToCompact } from "./time.js";
 export interface DiarizationPromptInput {
   /** user instructions (speaker hints, focus, grouping rules) */
   instructions?: string;
-  /** meeting/context description (from a describe pass or prior knowledge) */
-  description?: string;
   /** compact ASR diarized transcript used as a HINT (not authority) */
   asrHint?: string;
   /** for chunked processing: which chunk and how many */
@@ -27,7 +25,7 @@ export interface DiarizationPromptInput {
 export const DIARIZATION_SYSTEM = `You are an expert meeting transcriptionist and diarizer. You transcribe verbatim (including filler words and false starts), attribute every utterance to the correct speaker, and you are careful and literal. You never invent content you cannot hear.`;
 
 export function buildDiarizationPrompt(input: DiarizationPromptInput): string {
-  const { instructions, description, asrHint, chunk, previousTail } = input;
+  const { instructions, asrHint, chunk, previousTail } = input;
   const parts: string[] = [];
 
   if (chunk && chunk.total > 1) {
@@ -38,10 +36,6 @@ export function buildDiarizationPrompt(input: DiarizationPromptInput): string {
     );
   } else {
     parts.push(`This is a recorded talk/meeting. Produce a complete diarized transcript.`);
-  }
-
-  if (description) {
-    parts.push(`\nContext about this recording:\n${description}`);
   }
 
   if (instructions) {

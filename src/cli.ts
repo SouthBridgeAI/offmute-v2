@@ -88,6 +88,11 @@ program
         writeFileSync(p, result.json);
         written.push(p);
       }
+      if (want("text")) {
+        const p = join(outDir, `${base}.txt`);
+        writeFileSync(p, result.text);
+        written.push(p);
+      }
 
       process.stderr.write("\n\n");
       const { transcript } = result;
