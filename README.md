@@ -101,6 +101,33 @@ error rate** and **~99% word-level speaker attribution**, with turn boundaries r
 word timing (first cue at `00:00:00,160`, exactly matching ground truth). Full methodology, runs,
 and an independent re-score live in [`docs/`](#receipts--how-this-repo-was-built) and the article.
 
+## What's new in `offmute-v2@fable`
+
+The fable line is the daily-driver evolution of the primary build — same verified
+architecture, materially better to live with:
+
+- **Daemon mode** — `offmute-v2 watch ~/Recordings` transcribes media as it lands in a
+  folder. Waits for files to finish copying, never reprocesses finished work across
+  restarts, resumes killed jobs from cache, notifies when each transcript is ready.
+- **Costs you can see** — a predicted cost line *before* any paid call, an itemized
+  receipt after, and lifetime accounting in `~/.offmute` (`offmute-v2 stats`).
+- **Second-opinion speaker naming** — two different reasoner models name the speakers
+  independently; disagreements are settled by evidence quotes verified against the
+  transcript, and a self-introduction tripwire ("I'm X") outranks both. Names are never
+  invented under conflict. `offmute-v2 rename out.json "Speaker B=Ang Li"` retcons a
+  name without reprocessing.
+- **Sturdier diarization** — ASR voice clusters that alternate like conversation
+  partners are never merged into one "speaker" (the failure that used to fold a
+  teammate's replies into the presenter), and mixed-voice mega-segments are split at
+  word-level cluster boundaries.
+- **Better output** — merged same-speaker paragraphs by default (`--md-style turns` for
+  per-turn blocks), tone tags only when the delivery actually stands out, plain-`txt`
+  and self-contained `html` formats, and `--summary` (TL;DR / decisions / action items).
+- **More providers** — ElevenLabs Scribe v2 as an alternate clock
+  (`--timestamped elevenlabs`); reasoners from DeepSeek, Gemini, GLM (z.ai), Kimi,
+  OpenAI, and Anthropic. `offmute-v2 models` shows what your keys unlock;
+  `offmute-v2 doctor` health-checks ffmpeg, keys, and live API reachability.
+
 ## Features
 
 - 🎯 **Timestamp-correct** — word-level timing from ASR, fused onto LLM text by alignment.
@@ -132,22 +159,45 @@ npx offmute-v2 <input> [options]
 | --------------------------- | ------------------ | ------------------------------------------------------------------------------------- |
 | `-o, --output <dir>`        | _next to input_    | where to write the transcript(s); default is the input file's own folder              |
 | `--instructions <text>`     | –                  | guide diarization / labelling, e.g. `"host is Alice; group callers as 'Caller'"`      |
-| `--model <name>`            | `gemini-3.1-pro-preview` | multimodal LLM; use `gemini-2.5-flash` / `gemini-flash-latest` for faster/cheaper runs |
+| `--model <name>`            | `gemini-3.1-pro-preview` | multimodal LLM; use `gemini-3.5-flash` / `gemini-flash-latest` for faster/cheaper runs |
 | `--level <1\|2\|3>`         | `2`                | 1 = separation · 2 = stable anon · 3 = identify names                                 |
-| `--timestamped <p>`         | `assemblyai`       | timing provider: `assemblyai` · `whisper-groq` · `none`                               |
-| `--reasoner <name>`         | `deepseek-chat`    | text model for the name-identification pass (level 3)                                 |
+| `--speakers <names>`        | –                  | known speaker names, comma-separated (implies `--level 3`)                            |
+| `--identify <mode>`         | `dual`             | speaker naming: `dual` (two reasoners + adjudication) · `single`                      |
+| `--timestamped <p>`         | `assemblyai`       | timing provider: `assemblyai` · `elevenlabs` · `whisper-groq` · `none`                |
+| `--reasoner <name>`         | `deepseek-chat`    | text model for identify/summary (any of `offmute-v2 models`' reasoner pool)           |
+| `--formats <list>`          | `md`               | which outputs to write (`srt`, `md`, `txt`, `html`, `json`)                           |
+| `--md-style <style>`        | `merged`           | markdown layout: merged same-speaker paragraphs · `turns`                             |
+| `--summary`                 | off                | also write `<name>.summary.md` (TL;DR, decisions, action items)                       |
 | `--chunk-seconds <n>`       | `600`              | chunk length · `--overlap-seconds` (default `60`)                                     |
-| `--formats <list>`          | `md`               | which outputs to write (`srt`, `md`, `json`)                                          |
 | `--passes <list>`           | all                | run/resume a subset of stages                                                         |
 | `--force`                   | –                  | ignore caches and recompute                                                           |
 | `--only-chunk <n>`          | –                  | process a single chunk (debugging)                                                    |
 | `-i, --intermediates <dir>` | auto               | cache dir (auto-derived per input)                                                    |
+| `--no-notify`               | –                  | skip the OS notification after long runs                                              |
 
 ```bash
 npx offmute-v2 meeting.mp4 --level 3                       # name the speakers
-npx offmute-v2 meeting.mp4 --model gemini-2.5-pro          # higher quality
+npx offmute-v2 meeting.mp4 --summary --formats md,html     # summary + shareable page
 npx offmute-v2 talk.mov   --timestamped whisper-groq       # free/fast timing, no AssemblyAI
 npx offmute-v2 meeting.mp4 --passes align,consistency,finalize   # resume from cache
+```
+
+### Subcommands
+
+```bash
+offmute-v2 watch ~/Recordings --level 3 --summary   # daemon: transcribe as files land
+offmute-v2 models                                   # model matrix + what your keys unlock
+offmute-v2 doctor                                   # ffmpeg + key + API health check
+offmute-v2 stats                                    # lifetime hours / characters / cost
+offmute-v2 rename out.json "Speaker B=Ang Li"       # retcon names without reprocessing
+```
+
+Every run prints a cost estimate before spending and an itemized receipt after:
+
+```text
+estimated cost ~$0.46  [gemini-3.1-pro-preview: 6 chunks + describe ≈ $0.34 · assemblyai: 47min ≈ $0.12 · …]
+...
+receipt: 8 LLM calls · 214k in / 12k out · ~$0.43 · 6m12s
 ```
 
 ### Library

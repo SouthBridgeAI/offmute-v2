@@ -3,10 +3,11 @@
 This repo ships **one npm package (`offmute-v2`)** built by two different models, kept on two
 branches with **independent histories**:
 
-| Branch | Build                                          | npm dist-tag(s)        | Installed by                          |
-| ------ | ---------------------------------------------- | ---------------------- | ------------------------------------- |
-| `glm`  | GLM build — **primary**, daily-driven          | `latest` **and** `glm` | `npm i offmute-v2` / `offmute-v2@glm` |
-| `opus` | Opus build — preserved for receipts/comparison | `opus`                 | `offmute-v2@opus`                     |
+| Branch  | Build                                            | npm dist-tag(s)        | Installed by                          |
+| ------- | ------------------------------------------------ | ---------------------- | ------------------------------------- |
+| `glm`   | GLM build — **primary**, daily-driven            | `latest` **and** `glm` | `npm i offmute-v2` / `offmute-v2@glm` |
+| `opus`  | Opus build — preserved for receipts/comparison   | `opus`                 | `offmute-v2@opus`                     |
+| `fable` | Fable build — daemon, identify v2, costs, et al. | `fable`                | `offmute-v2@fable`                    |
 
 `glm` is the default branch. Both branches publish the same package name and the same
 `offmute-v2` CLI binary; only the dist-tag and version differ, so all three of
@@ -20,6 +21,9 @@ npm versions must be unique per publish, so the two lines never collide:
 - **opus** uses an `-opus.N` prerelease so it can never accidentally become `latest`
   (and so the workflow can detect it by the `-opus` tag): `0.0.1-opus.0`, `0.0.1-opus.1`, …
   Bump the prerelease counter per opus publish.
+- **fable** uses an `-fable.N` prerelease (`0.1.0-fable.0`, `0.1.0-fable.1`, …) and the
+  `fable` dist-tag. To promote fable to primary later: merge `fable` → `master`, drop the
+  prerelease suffix, publish normally (→ `@latest`).
 
 ## How publishing works (npm Trusted Publishing / OIDC)
 
@@ -29,6 +33,7 @@ package.json version at the released commit:
 
 - version `X.Y.Z` → `npm publish` (→ `@latest`) + `npm dist-tag add … glm`
 - version `X.Y.Z-opus.N` → `npm publish --tag opus`
+- version `X.Y.Z-fable.N` → `npm publish --tag fable`
 
 It runs with `id-token: write`, Node 24 + npm ≥ 11.5.1, `--provenance` (the repo is public),
 and no `NODE_AUTH_TOKEN`.

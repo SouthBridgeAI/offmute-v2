@@ -37,6 +37,8 @@ jobs:
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           if [[ "$VERSION" == *-opus* ]]; then
             echo "variant=opus" >> "$GITHUB_OUTPUT"
+          elif [[ "$VERSION" == *-fable* ]]; then
+            echo "variant=fable" >> "$GITHUB_OUTPUT"
           else
             echo "variant=glm" >> "$GITHUB_OUTPUT"
           fi
@@ -61,8 +63,8 @@ jobs:
           bun install --frozen-lockfile
           bun run build
 
-      - name: Install & build (glm)
-        if: steps.pkg.outputs.variant == 'glm'
+      - name: Install & build (glm / fable)
+        if: steps.pkg.outputs.variant == 'glm' || steps.pkg.outputs.variant == 'fable'
         run: |
           npm ci
           npm run build
@@ -81,6 +83,11 @@ jobs:
       - name: Publish opus build (@opus)
         if: steps.pkg.outputs.variant == 'opus' && steps.guard.outputs.exists == 'false'
         run: npm publish --provenance --access public --tag opus
+
+      # fable -> @fable (prerelease version keeps it off @latest until promoted)
+      - name: Publish fable build (@fable)
+        if: steps.pkg.outputs.variant == 'fable' && steps.guard.outputs.exists == 'false'
+        run: npm publish --provenance --access public --tag fable
 
       # primary line -> @latest only (does NOT touch the @glm receipt tag)
       - name: Publish primary build (@latest)
