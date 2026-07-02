@@ -16,6 +16,7 @@ import { runModels } from "./commands/models.js";
 import { runDoctor } from "./commands/doctor.js";
 import { runStats } from "./commands/stats.js";
 import { runRename } from "./commands/rename.js";
+import { runWatch } from "./commands/watch.js";
 import { notify } from "./utils/notify.js";
 import { basename } from "node:path";
 
@@ -171,6 +172,67 @@ program
   .command("stats")
   .description("lifetime stats: hours processed, characters, cost by model")
   .action(runStats);
+
+program
+  .command("watch <dir>")
+  .description("daemon mode: watch a folder, transcribe media files as they appear")
+  .option("--match <exts>", "comma-separated extensions to watch (default: common media)")
+  .option("--jobs <n>", "max concurrent transcription jobs", "1")
+  .option("--no-backlog", "skip files already in the folder at startup")
+  .option("-o, --output <dir>", "write transcripts here (default: next to each input)")
+  .option("--formats <list>", "output formats: srt,md,txt,json (default: md)")
+  .option("--md-style <style>", "markdown layout: merged | turns", "merged")
+  .option("--instructions <text>", "custom instructions for the LLM")
+  .option("--speakers <names>", "known speaker names, comma-separated (implies --level 3)")
+  .option("--level <1|2|3>", "diarization level", "3")
+  .option("--identify <mode>", "speaker naming: dual | single", "dual")
+  .option("--model <name>", "override transcription model")
+  .option("--reasoner <name>", "override text-reasoner model")
+  .option("--timestamped <provider>", "assemblyai|elevenlabs|whisper-groq|none")
+  .action(
+    async (
+      dir: string,
+      opts: {
+        match?: string;
+        jobs: string;
+        backlog: boolean;
+        output?: string;
+        formats?: string;
+        mdStyle?: "merged" | "turns";
+        instructions?: string;
+        speakers?: string;
+        level: string;
+        identify?: "dual" | "single";
+        model?: string;
+        reasoner?: string;
+        timestamped?: "assemblyai" | "elevenlabs" | "whisper-groq" | "none";
+      },
+    ) => {
+      let level = parseInt(opts.level, 10) as 1 | 2 | 3;
+      if (opts.speakers && level < 3) level = 3;
+      await runWatch(dir, {
+        match: opts.match,
+        jobs: opts.jobs,
+        backlog: opts.backlog,
+        output: opts.output,
+        pipeline: {
+          formats: opts.formats
+            ? (opts.formats.split(",") as ("srt" | "md" | "json" | "txt")[])
+            : undefined,
+          mdStyle: opts.mdStyle,
+          instructions: opts.instructions,
+          knownSpeakers: opts.speakers
+            ? opts.speakers.split(",").map((s) => s.trim()).filter(Boolean)
+            : undefined,
+          diarizationLevel: level,
+          identifyMode: opts.identify,
+          model: opts.model,
+          reasoner: opts.reasoner,
+          timestampedProvider: opts.timestamped,
+        },
+      });
+    },
+  );
 
 program
   .command("rename <result-json> <mappings...>")
