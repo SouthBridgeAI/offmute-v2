@@ -39,6 +39,8 @@ export interface IdentifyV2Decision {
     | "b-only"
     | "evidence-break"
     | "tripwire"
+    | "elimination"
+    | "conflict-fallback"
     | "kept-generic";
   finalName?: string;
   note?: string;
@@ -62,17 +64,47 @@ const norm = (s: string) =>
     .replace(/\s+/g, " ")
     .trim();
 
+/** Char edit distance ≤ 1 (one substitution/insertion/deletion). */
+function withinOneEdit(a: string, b: string): boolean {
+  if (a === b) return true;
+  if (Math.abs(a.length - b.length) > 1) return false;
+  const [s, l] = a.length <= b.length ? [a, b] : [b, a];
+  let i = 0;
+  let j = 0;
+  let edits = 0;
+  while (i < s.length && j < l.length) {
+    if (s[i] === l[j]) {
+      i++;
+      j++;
+      continue;
+    }
+    if (++edits > 1) return false;
+    if (s.length === l.length) i++; // substitution
+    j++; // insertion in the longer
+  }
+  return edits + (l.length - j) <= 1;
+}
+
+/** Two name tokens are the same if equal, or one edit apart for longer tokens —
+ * transcription renders the same spoken name differently across models/passes
+ * ("Rishi"/"Hrishi", "Hanjun"/"Hanjin"). Short tokens must match exactly (Jay≠Ray). */
+function tokensMatch(a: string, b: string): boolean {
+  if (a === b) return true;
+  return a.length >= 5 && b.length >= 5 && withinOneEdit(a, b);
+}
+
 /** Do two name strings plausibly refer to the same person? */
 export function namesMatch(a: string, b: string): boolean {
   const na = norm(a);
   const nb = norm(b);
   if (!na || !nb) return false;
   if (na === nb) return true;
-  // One is a subset of the other ("Rishi" vs "Rishi Olickel"), token-wise.
-  const ta = new Set(na.split(" "));
-  const tb = new Set(nb.split(" "));
-  const [small, big] = ta.size <= tb.size ? [ta, tb] : [tb, ta];
-  return [...small].every((t) => big.has(t));
+  // Every token of the shorter name matches some token of the longer one
+  // ("Rishi" ⊂ "Hrishi Olickel", fuzzy at the token level).
+  const ta = na.split(" ");
+  const tb = nb.split(" ");
+  const [small, big] = ta.length <= tb.length ? [ta, tb] : [tb, ta];
+  return small.every((t) => big.some((u) => tokensMatch(t, u)));
 }
 
 /** Does an evidence quote actually appear in the transcript (normalized substring)? */
@@ -86,8 +118,11 @@ export function evidenceInTranscript(
   return transcript.includes(ne);
 }
 
+// First-person introductions only. "[Tt]his is X" is deliberately NOT matched — people
+// say "this is Reddit, man" about their screen constantly (live failure: a speaker got
+// named "Reddit"), and the phone-intro sense is rare in recorded meetings.
 const INTRO_RE =
-  /\b(?:[Mm]y name is|I am|I'm|[Tt]his is)[,\s]+([A-Z][\p{L}'’-]+(?:\s+[A-Z][\p{L}'’-]+)?)/gu;
+  /\b(?:[Mm]y name is|I am|I'm)[,\s]+([A-Z][\p{L}'’-]+(?:\s+[A-Z][\p{L}'’-]+)?)/gu;
 // Words that follow "I'm ..." constantly without being names (observed live: a
 // capitalized mid-sentence "I'm" matched as the *name* "I'm" — pronouns must die here).
 const INTRO_STOPWORDS = new Set([
@@ -175,6 +210,8 @@ export function adjudicate(
   b: Candidate | undefined,
   transcriptNorm: string,
   intro: string | undefined,
+  /** The intro name also appears in the roster / known speakers (safe to adopt alone). */
+  introCorroborated = false,
 ): IdentifyV2Decision {
   const base: IdentifyV2Decision = {
     speakerId,
@@ -195,19 +232,24 @@ export function adjudicate(
     return { ...base, outcome: "agreed", finalName: pickCompleteName(aName, bName) };
   }
 
-  // The tripwire outranks the models: a self-introduction is the strongest evidence.
+  // The tripwire outranks the models WHEN it corroborates one of them: a
+  // self-introduction matching a model's answer is the strongest evidence.
   if (intro) {
     if (aName && namesMatch(aName, intro))
       return { ...base, outcome: "tripwire", finalName: aName, note: `intro "${intro}"` };
     if (bName && namesMatch(bName, intro))
       return { ...base, outcome: "tripwire", finalName: bName, note: `intro "${intro}"` };
-    // Neither pass matches a stated introduction — adopt the introduced name itself.
-    return {
-      ...base,
-      outcome: "tripwire",
-      finalName: intro,
-      note: `intro "${intro}" overrode both passes`,
-    };
+    // A regex-extracted name that NO model backs is more likely a false positive
+    // ("This is Reddit, man" named a speaker "Reddit" live) — only adopt it alone
+    // when the roster/known speakers corroborate it.
+    if (introCorroborated) {
+      return {
+        ...base,
+        outcome: "tripwire",
+        finalName: intro,
+        note: `intro "${intro}" corroborated by roster/known speakers`,
+      };
+    }
   }
 
   if (aName && !bName) return { ...base, outcome: "a-only", finalName: aName };
@@ -244,6 +286,8 @@ export interface IdentifyV2Options {
   mode?: "dual" | "single";
   /** Tentative names from the transcription labels (unverified, possibly swapped). */
   nameHints?: Record<string, string>;
+  /** The recording's filename — meeting recorders often name participants in it. */
+  sourceFileName?: string;
 }
 
 export async function identifySpeakersV2(
@@ -263,6 +307,7 @@ export async function identifySpeakersV2(
       opts.roster,
       opts.knownSpeakers,
       opts.nameHints,
+      opts.sourceFileName,
     );
 
   const wantB = mode === "dual" && reasonerB !== null;
@@ -270,6 +315,17 @@ export async function identifySpeakersV2(
     runPass(reasonerA),
     wantB ? runPass(reasonerB!) : Promise.resolve(undefined),
   ]);
+
+  // Distinguish "verified: no names in evidence" from "the passes never ran".
+  // A transient outage must not masquerade as a considered decision.
+  const passFailed = (r: IdentifyResult | undefined) =>
+    !!r && r.speakers.length === 0 && /fetch failed|HTTP \d|network|ENOTFOUND|JSON parse|no response/i.test(r.reasoning);
+  if (passFailed(resA) && (!wantB || passFailed(resB))) {
+    logger.warn(
+      `identify: ALL passes failed (${resA.reasoning.slice(0, 80)}) — speakers left as generic labels. ` +
+        `Re-run to retry naming cheaply (everything else is cached).`,
+    );
+  }
 
   const transcriptNorm = norm(segments.map((s) => s.text).join(" "));
   const tripwires = findSelfIntroductions(segments);
@@ -288,22 +344,86 @@ export async function identifySpeakersV2(
   const byIdB = resB ? new Map(resB.speakers.map((s) => [s.id, s])) : undefined;
 
   const decisions: IdentifyV2Decision[] = [];
+  // An intro name is "corroborated" when the roster or known speakers mention it —
+  // that makes it safe to adopt even when both model passes missed it.
+  const corroborationText = norm(`${opts.roster ?? ""} ${(opts.knownSpeakers ?? []).join(" ")}`);
+  const isCorroborated = (name: string | undefined): boolean => {
+    if (!name) return false;
+    const n = norm(name);
+    return n.length >= 3 && corroborationText.includes(n);
+  };
+
   const nameMap: Record<string, string> = {};
   for (const sp of speakers) {
     const a = byIdA.get(sp.id) ?? { name: resA.nameMap[sp.id] };
     const b = byIdB ? (byIdB.get(sp.id) ?? { name: resB!.nameMap[sp.id] }) : undefined;
+    const intro = introBySpeaker.get(sp.id);
     const d = adjudicate(
       sp.id,
       a ?? {},
       wantB ? (b ?? {}) : undefined,
       transcriptNorm,
-      introBySpeaker.get(sp.id),
+      intro,
+      isCorroborated(intro),
     );
     decisions.push(d);
     if (d.finalName) nameMap[sp.id] = d.finalName;
   }
 
+  // Coherence: one person cannot be two voices. If two speakers ended up with matching
+  // names (e.g. pass A and pass B swapped a name pair and per-speaker evidence breaks
+  // resolved BOTH to the same person — observed live: two "Hrishi"s), keep only the
+  // strongest claim and demote the rest to generic labels.
+  const STRENGTH: Record<IdentifyV2Decision["outcome"], number> = {
+    agreed: 4,
+    tripwire: 3,
+    "evidence-break": 2,
+    "a-only": 1,
+    "b-only": 1,
+    elimination: 1,
+    "conflict-fallback": 0,
+    "kept-generic": 0,
+  };
+  const named = decisions.filter((d) => d.finalName);
+  for (let i = 0; i < named.length; i++) {
+    for (let j = i + 1; j < named.length; j++) {
+      const di = named[i]!;
+      const dj = named[j]!;
+      if (!di.finalName || !dj.finalName) continue;
+      if (!namesMatch(di.finalName, dj.finalName)) continue;
+      const si = STRENGTH[di.outcome];
+      const sj = STRENGTH[dj.outcome];
+      const losers = si === sj ? [di, dj] : si < sj ? [di] : [dj];
+      for (const loser of losers) {
+        loser.note = `demoted: "${loser.finalName}" also claimed by another speaker with ${si === sj ? "equal" : "stronger"} evidence`;
+        loser.finalName = undefined;
+        loser.outcome = "conflict-fallback";
+        delete nameMap[loser.speakerId];
+      }
+    }
+  }
+
+  // Elimination: when the user supplied the speaker list and exactly one known name
+  // and one unnamed voice remain, the leftover name belongs to the leftover voice.
+  if (opts.knownSpeakers?.length) {
+    const unusedNames = opts.knownSpeakers.filter(
+      (n) => !decisions.some((d) => d.finalName && namesMatch(d.finalName, n)),
+    );
+    const unnamed = decisions.filter((d) => !d.finalName);
+    if (unusedNames.length === 1 && unnamed.length === 1) {
+      const d = unnamed[0]!;
+      d.finalName = unusedNames[0]!;
+      d.outcome = "elimination";
+      d.note = `only remaining known speaker`;
+      nameMap[d.speakerId] = d.finalName;
+      logger.info(`identify: "${d.speakerId}" → ${d.finalName} (by elimination from --speakers)`);
+    }
+  }
+
   for (const d of decisions) {
+    if (d.outcome === "conflict-fallback") {
+      logger.info(`identify: "${d.speakerId}" kept generic — ${d.note}`);
+    }
     if (d.outcome === "kept-generic" && (d.nameA || d.nameB)) {
       logger.info(
         `identify: kept "${d.speakerId}" generic — passes disagreed (${d.nameA ?? "—"} vs ${d.nameB ?? "—"})`,

@@ -74,6 +74,7 @@ export function identifyPrompt(
   roster: string,
   knownSpeakers?: string[],
   nameHints?: Record<string, string>,
+  sourceFileName?: string,
 ): string {
   const hintBlock =
     nameHints && Object.keys(nameHints).length
@@ -91,14 +92,16 @@ CRITICAL — direction of address: when a speaker says a name, work out whether 
 
 BEWARE the roster and tentative labels: they describe who is PRESENT, but their name-to-voice binding may be wrong or swapped (this happens when speakers sound similar). Verify every name against first-person evidence in the transcript itself. If the transcript contradicts a tentative label, trust the transcript. If you cannot verify which of two speakers a name belongs to, leave both names empty rather than guess.
 
-${knownSpeakers && knownSpeakers.length ? `Known possible speakers: ${knownSpeakers.join(", ")}\n` : ""}ROSTER:
+Prefer real human names over screen handles/usernames when both are available for the same person (e.g. a recording named after "Jay" whose call UI shows a handle — the person is Jay).
+
+${knownSpeakers && knownSpeakers.length ? `Known possible speakers: ${knownSpeakers.join(", ")}\n` : ""}${sourceFileName ? `RECORDING FILENAME (often names participants): ${sourceFileName}\n` : ""}ROSTER:
 ${roster}
 ${hintBlock}
 TRANSCRIPT:
 ${transcriptExcerpt}
 
 Respond as JSON: { "speakers": [ { "id": "<exact speaker id from the headers>", "name": "Full Name or Role", "confidence": "high|medium|low", "evidence": "a short quote copied VERBATIM from the transcript above that supports the name" } ], "reasoning": "one-paragraph summary" }
-Use the EXACT speaker id strings (e.g. "Speaker A"). The evidence field must be an exact quote from the transcript — do not paraphrase it.`;
+Use the EXACT speaker id strings (e.g. "Speaker A"). The evidence field must be an exact quote from the TRANSCRIPT — never the filename, roster, or your own words; an unverifiable evidence quote disqualifies the name.`;
 }
 
 /** Identify speakers via a text reasoner. Returns a name map (speaker id → name). */
@@ -110,6 +113,7 @@ export async function identifySpeakers(
   roster: string,
   knownSpeakers?: string[],
   nameHints?: Record<string, string>,
+  sourceFileName?: string,
 ): Promise<IdentifyResult> {
   const excerpt = buildTranscriptExcerpt(segments, speakers);
   const { data, error } = await client.chatJson<{
@@ -117,10 +121,16 @@ export async function identifySpeakers(
     reasoning: string;
   }>(
     model,
-    [{ role: "user", content: identifyPrompt(excerpt, roster, knownSpeakers, nameHints) }],
-    // 4000 tokens: verbose models quote long verbatim evidence — a 2000 cap truncated
-    // mid-JSON and silently emptied a whole identify pass (observed live).
-    { temperature: 0.1, maxTokens: 4000, logKind: "identify" },
+    [
+      {
+        role: "user",
+        content: identifyPrompt(excerpt, roster, knownSpeakers, nameHints, sourceFileName),
+      },
+    ],
+    // 8000 tokens: verbose models quote long verbatim evidence, and Gemini's compat
+    // endpoint spends part of the budget on thinking — tighter caps truncated
+    // mid-JSON and silently emptied whole identify passes (observed live, twice).
+    { temperature: 0.1, maxTokens: 8000, logKind: "identify" },
   );
   if (error || !data) {
     return { nameMap: {}, speakers: [], reasoning: error || "no response" };

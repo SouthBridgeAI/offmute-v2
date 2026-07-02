@@ -676,6 +676,7 @@ export async function transcribe(opts: PipelineOptions): Promise<TranscriptResul
           knownSpeakers: options.knownSpeakers,
           mode,
           nameHints,
+          sourceFileName: basename(options.input),
         },
       ).catch(stageTag("identify"));
       logger.info(

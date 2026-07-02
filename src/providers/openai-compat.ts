@@ -47,7 +47,9 @@ export class OpenAICompatClient {
 
   async chat(model: string | undefined, messages: ChatMessage[], opts: ChatOptions = {}): Promise<ChatResult> {
     const m = model ?? this.defaultModel;
-    const maxRetries = opts.maxRetries ?? 2;
+    // 5 attempts with exponential backoff (~60s envelope) — text calls are cheap and
+    // transient network outages here outlast a couple of quick retries.
+    const maxRetries = opts.maxRetries ?? 5;
     const body: Record<string, unknown> = {
       model: m,
       messages,
@@ -56,6 +58,12 @@ export class OpenAICompatClient {
     if (opts.maxTokens) body.max_tokens = opts.maxTokens;
     if (opts.responseJson) {
       body.response_format = { type: "json_object" };
+    }
+    // Gemini's OpenAI-compat endpoint counts THINKING tokens against max_tokens, which
+    // can truncate the visible answer mid-JSON (observed live: unterminated string).
+    // These are extraction tasks, not reasoning tasks — keep thinking low.
+    if (this.providerName === "gemini") {
+      body.reasoning_effort = "low";
     }
 
     let lastError: string | undefined;
@@ -104,6 +112,10 @@ export class OpenAICompatClient {
           delete body.response_format;
           continue;
         }
+        if (body.reasoning_effort && /reasoning_effort|reasoning effort/i.test(lastError)) {
+          delete body.reasoning_effort;
+          continue;
+        }
         logLlmCall({
           ts: new Date(t0).toISOString(),
           provider: this.providerName,
@@ -115,22 +127,32 @@ export class OpenAICompatClient {
           attempt: attempt + 1,
           error: lastError,
         });
-        if (attempt < maxRetries - 1) await new Promise((r) => setTimeout(r, 1500 * (attempt + 1)));
+        if (attempt < maxRetries - 1)
+          await new Promise((r) => setTimeout(r, 2000 * 2 ** attempt));
       }
     }
     return { text: "", usage: { inputTokens: 0, outputTokens: 0 }, error: lastError };
   }
 
   async chatJson<T = unknown>(model: string | undefined, messages: ChatMessage[], opts: ChatOptions = {}): Promise<{ data: T | null; raw: string; error?: string }> {
-    const res = await this.chat(model, messages, { ...opts, responseJson: true });
-    if (res.error || !res.text) return { data: null, raw: res.text, error: res.error };
-    try {
-      let txt = res.text.trim();
-      const fence = txt.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
-      if (fence && fence[1]) txt = fence[1];
-      return { data: JSON.parse(txt) as T, raw: res.text };
-    } catch (err) {
-      return { data: null, raw: res.text, error: `JSON parse: ${err instanceof Error ? err.message : String(err)}` };
+    // A malformed/truncated JSON response is a per-sample failure, not a hard error —
+    // one fresh resample usually fixes it (network retries live inside chat()).
+    let lastRaw = "";
+    let lastError: string | undefined;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const res = await this.chat(model, messages, { ...opts, responseJson: true });
+      lastRaw = res.text;
+      lastError = res.error;
+      if (res.error || !res.text) continue;
+      try {
+        let txt = res.text.trim();
+        const fence = txt.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
+        if (fence && fence[1]) txt = fence[1];
+        return { data: JSON.parse(txt) as T, raw: res.text };
+      } catch (err) {
+        lastError = `JSON parse: ${err instanceof Error ? err.message : String(err)}`;
+      }
     }
+    return { data: null, raw: lastRaw, error: lastError };
   }
 }

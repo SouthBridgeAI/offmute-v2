@@ -14,6 +14,15 @@ describe("namesMatch", () => {
     expect(namesMatch("Rishi", "Matthew")).toBe(false);
     expect(namesMatch("", "Rishi")).toBe(false);
   });
+
+  it("tolerates one-edit spelling variants of longer name tokens", () => {
+    // Different models render the same heard name differently.
+    expect(namesMatch("Rishi", "Hrishi Olickel")).toBe(true);
+    expect(namesMatch("Hanjin Kim", "Hanjun Kim")).toBe(true);
+    // Short tokens must match exactly — Jay is not Ray.
+    expect(namesMatch("Jay", "Ray")).toBe(false);
+    expect(namesMatch("Anna", "Alma")).toBe(false);
+  });
 });
 
 describe("evidenceInTranscript", () => {
@@ -78,13 +87,41 @@ describe("adjudicate", () => {
     expect(d.finalName).toBeUndefined();
   });
 
-  it("lets a self-introduction override both passes", () => {
+  it("lets a corroborated self-introduction override both passes", () => {
     const d = adjudicate(
       "Speaker A",
       { name: "Moderator" },
       { name: "Host" },
       transcript,
       "Ang Li",
+      true, // roster/known speakers mention Ang Li
+    );
+    expect(d.outcome).toBe("tripwire");
+    expect(d.finalName).toBe("Ang Li");
+  });
+
+  it("does not let an uncorroborated intro override both passes (false-positive guard)", () => {
+    // "This is Reddit, man" style extraction: no model and no roster backs "Reddit".
+    const d = adjudicate(
+      "Speaker A",
+      { name: "Moderator", evidence: "im ang li ceo of simular" },
+      { name: "Host", evidence: "fabricated quote" },
+      transcript,
+      "Reddit",
+      false,
+    );
+    expect(d.outcome).not.toBe("tripwire");
+    expect(d.finalName).not.toBe("Reddit");
+  });
+
+  it("still prefers a model answer the intro corroborates", () => {
+    const d = adjudicate(
+      "Speaker A",
+      { name: "Ang Li" },
+      { name: "Moderator" },
+      transcript,
+      "Ang Li",
+      false,
     );
     expect(d.outcome).toBe("tripwire");
     expect(d.finalName).toBe("Ang Li");
@@ -94,5 +131,48 @@ describe("adjudicate", () => {
     const d = adjudicate("Speaker A", { name: "Ang Li" }, undefined, transcript, undefined);
     expect(d.outcome).toBe("a-only");
     expect(d.finalName).toBe("Ang Li");
+  });
+});
+
+describe("identifySpeakersV2 name uniqueness", () => {
+  it("demotes duplicate final names to generic (one person cannot be two voices)", async () => {
+    // Pass A and pass B swap a name pair; per-speaker resolution would yield the same
+    // person twice — the coherence check must demote both equal-strength claims.
+    const mkPass = (map: Record<string, string>) => ({
+      speakers: Object.entries(map).map(([id, name]) => ({
+        id,
+        name,
+        confidence: "high",
+        evidence: "fabricated either way",
+      })),
+      reasoning: "",
+    });
+    const passes = [
+      mkPass({ "Speaker A": "Hrishi", "Speaker B": "Jay" }),
+      mkPass({ "Speaker A": "Jay", "Speaker B": "Hrishi Olickel" }),
+    ];
+    let call = 0;
+    const fakeClient = {
+      chatJson: async () => ({ data: passes[call++ % 2], raw: "", error: undefined }),
+    };
+    const { identifySpeakersV2 } = await import("../src/diarize/identify2.js");
+    const handle = (m: string) => ({
+      client: fakeClient as never,
+      model: m,
+      provider: m,
+    });
+    const res = await identifySpeakersV2(
+      handle("model-a"),
+      handle("model-b"),
+      [
+        { speaker: "Speaker A", text: "hello there" },
+        { speaker: "Speaker B", text: "hi yourself" },
+      ],
+      [{ id: "Speaker A" }, { id: "Speaker B" }],
+      { roster: "(none)" },
+    );
+    // Neither speaker keeps a name — the binding is genuinely disputed.
+    expect(Object.keys(res.nameMap)).toHaveLength(0);
+    expect(res.decisions.every((d) => !d.finalName)).toBe(true);
   });
 });
