@@ -75,9 +75,13 @@ export function evidenceInTranscript(evidence: string | undefined, transcript: s
 
 const INTRO_RE =
   /\b(?:[Mm]y name is|I am|I'm|[Tt]his is)[,\s]+([A-Z][\p{L}'’-]+(?:\s+[A-Z][\p{L}'’-]+)?)/gu;
+// Words that follow "I'm ..." constantly without being names (observed live: a
+// capitalized mid-sentence "I'm" matched as the *name* "I'm" — pronouns must die here).
 const INTRO_STOPWORDS = new Set([
-  "so", "not", "just", "here", "going", "really", "very", "also", "still", "sure",
-  "sorry", "happy", "glad", "excited", "curious", "the", "a", "an", "okay",
+  "i", "im", "ive", "id", "ill", "you", "we", "they", "he", "she", "it",
+  "so", "not", "just", "here", "there", "going", "gonna", "really", "very", "also",
+  "still", "sure", "sorry", "happy", "glad", "excited", "curious", "the", "a", "an",
+  "okay", "ok", "now", "like", "actually", "basically", "kind", "sort", "definitely",
 ]);
 
 /** Find self-introductions: segments where the speaker states their own name. */
@@ -88,8 +92,9 @@ export function findSelfIntroductions(
   for (const seg of segments) {
     for (const m of seg.text.matchAll(INTRO_RE)) {
       const name = m[1]!.trim();
-      const first = name.split(/\s+/)[0]!.toLowerCase();
-      if (INTRO_STOPWORDS.has(first)) continue;
+      const tokens = name.split(/\s+/).map((t) => t.toLowerCase().replace(/['’]/g, ""));
+      if (tokens.some((t) => INTRO_STOPWORDS.has(t))) continue;
+      if (name.replace(/[^\p{L}]/gu, "").length < 3) continue; // too short to be a name
       out.push({ speakerId: seg.speaker, introducedName: name, segmentText: seg.text.slice(0, 160) });
     }
   }

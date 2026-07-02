@@ -47,6 +47,7 @@ interface TranscribeCliOpts {
   screenshots: string;
   formats?: string;
   mdStyle?: "merged" | "turns";
+  summary: boolean;
   speakers?: string;
   level: string;
   identify?: "dual" | "single";
@@ -80,9 +81,10 @@ async function runTranscribe(input: string, opts: TranscribeCliOpts): Promise<vo
     concurrency: parseInt(opts.concurrency, 10),
     screenshotCount: parseInt(opts.screenshots, 10),
     formats: opts.formats
-      ? (opts.formats.split(",") as ("srt" | "md" | "json" | "txt")[])
+      ? (opts.formats.split(",") as ("srt" | "md" | "json" | "txt" | "html")[])
       : undefined, // undefined → defaults to ["md"]
     mdStyle: opts.mdStyle,
+    summary: opts.summary,
     knownSpeakers: opts.speakers
       ? opts.speakers.split(",").map((s) => s.trim()).filter(Boolean)
       : undefined,
@@ -119,8 +121,9 @@ function addTranscribeOptions(cmd: Command): Command {
     .option("--overlap-seconds <n>", "chunk overlap in seconds", "60")
     .option("--concurrency <n>", "max concurrent chunk requests", "4")
     .option("--screenshots <n>", "number of keyframes to extract (video)", "6")
-    .option("--formats <list>", "output formats: srt,md,txt,json (default: md)")
+    .option("--formats <list>", "output formats: srt,md,txt,html,json (default: md)")
     .option("--md-style <style>", "markdown layout: merged (paragraphs) | turns", "merged")
+    .option("--summary", "also write <name>.summary.md (TL;DR, decisions, action items)", false)
     .option("--speakers <names>", "known speaker names, comma-separated (implies --level 3)")
     .option("--level <1|2|3>", "diarization level (1=separation, 2=consistent, 3=identify)", "2")
     .option("--identify <mode>", "speaker naming: dual (two reasoners, default) | single", "dual")
@@ -180,8 +183,9 @@ program
   .option("--jobs <n>", "max concurrent transcription jobs", "1")
   .option("--no-backlog", "skip files already in the folder at startup")
   .option("-o, --output <dir>", "write transcripts here (default: next to each input)")
-  .option("--formats <list>", "output formats: srt,md,txt,json (default: md)")
+  .option("--formats <list>", "output formats: srt,md,txt,html,json (default: md)")
   .option("--md-style <style>", "markdown layout: merged | turns", "merged")
+  .option("--summary", "also write a summary per file", false)
   .option("--instructions <text>", "custom instructions for the LLM")
   .option("--speakers <names>", "known speaker names, comma-separated (implies --level 3)")
   .option("--level <1|2|3>", "diarization level", "3")
@@ -199,6 +203,7 @@ program
         output?: string;
         formats?: string;
         mdStyle?: "merged" | "turns";
+        summary: boolean;
         instructions?: string;
         speakers?: string;
         level: string;
@@ -217,9 +222,10 @@ program
         output: opts.output,
         pipeline: {
           formats: opts.formats
-            ? (opts.formats.split(",") as ("srt" | "md" | "json" | "txt")[])
+            ? (opts.formats.split(",") as ("srt" | "md" | "json" | "txt" | "html")[])
             : undefined,
           mdStyle: opts.mdStyle,
+          summary: opts.summary,
           instructions: opts.instructions,
           knownSpeakers: opts.speakers
             ? opts.speakers.split(",").map((s) => s.trim()).filter(Boolean)

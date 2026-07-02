@@ -28,4 +28,6 @@ export { assignGlobalSpeakers } from "./diarize/consistency.js";
 export { identifySpeakers } from "./diarize/identify.js";
 export { finalizeSegments } from "./finalize/finalize.js";
 export { formatSrt, formatMarkdown, formatText, formatJson } from "./finalize/format.js";
+export { formatHtml } from "./finalize/html.js";
+export { summarizeTranscript } from "./finalize/summary.js";
 export { parseSrt } from "./utils/srt.js";

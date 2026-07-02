@@ -26,8 +26,36 @@ export interface ConsistencyResult {
 
 /** A generic LLM label like "Speaker A" / "Unknown" — not safe to merge by. */
 function isGenericLabel(label: string): boolean {
-  return /^(speaker\s+[a-z0-9]+|unknown|audience(\s+member)?(\s+\d+)?)$/i.test(label.trim());
+  return /^(speaker\s+[a-z0-9]+|voice\s+\S+|unknown|audience(\s+member)?(\s+\d+)?)$/i.test(
+    label.trim(),
+  );
 }
+
+/**
+ * Count adjacent A↔B transitions in the time-ordered ASR utterance sequence.
+ * A real over-split (one voice that the diarizer broke into two clusters) essentially
+ * never alternates utterance-by-utterance; two people in conversation alternate
+ * constantly. Used to block label-merges of actual conversation partners — the
+ * failure that fused two people into one "Hrishi" on the Gray Beetle team call.
+ */
+export function countTurnTransitions(
+  utterances: TimestampedUtterance[],
+  a: string,
+  b: string,
+): number {
+  const seq = [...utterances]
+    .sort((x, y) => x.start - y.start)
+    .map((u) => u.speaker)
+    .filter((s) => s === a || s === b);
+  let transitions = 0;
+  for (let i = 1; i < seq.length; i++) {
+    if (seq[i] !== seq[i - 1]) transitions++;
+  }
+  return transitions;
+}
+
+/** Above this many alternations, two ASR clusters are conversation partners, not an over-split. */
+const MAX_MERGE_TRANSITIONS = 3;
 
 /** Assign globally-consistent speaker ids to aligned segments via ASR time overlap,
  * merging ASR speakers that the LLM consistently labels the same specific name/role
@@ -89,7 +117,10 @@ export function assignGlobalSpeakers(
     dominantLabel[asrSp] = best ? best[0] : asrSp;
   }
 
-  // Merge ASR speakers that share a SPECIFIC dominant label (same person, ASR over-split).
+  // Merge ASR speakers that share a SPECIFIC dominant label (same person, ASR
+  // over-split) — but ONLY when the two clusters don't alternate in conversation.
+  // The LLM can slap the same (roster) name on two real people; the turn-taking
+  // pattern of the ASR clusters is the tiebreaker the label can't fake.
   const asrToGroup: Record<string, string> = {};
   const groupLabel: Record<string, string> = {};
   const groupTalk: Record<string, number> = {}; // group → total talk DURATION
@@ -98,8 +129,20 @@ export function assignGlobalSpeakers(
     const label = dominantLabel[asrSp] ?? asrSp;
     let groupId: string | undefined;
     if (!isGenericLabel(label)) {
-      // Find an existing group with the same specific label.
-      groupId = Object.keys(groupLabel).find((g) => groupLabel[g] === label);
+      const candidate = Object.keys(groupLabel).find((g) => groupLabel[g] === label);
+      if (candidate && hasDiarization) {
+        const partners = groupAsrVoices[candidate] ?? [];
+        const maxTransitions = Math.max(
+          ...partners.map((p) => countTurnTransitions(asrUtterances, p, asrSp)),
+        );
+        if (maxTransitions <= MAX_MERGE_TRANSITIONS) {
+          groupId = candidate;
+        }
+        // else: they alternate like conversation partners — keep them separate
+        // (the shared display name is resolved below).
+      } else if (candidate) {
+        groupId = candidate;
+      }
     }
     if (!groupId) {
       groupId = asrSp;
@@ -117,11 +160,22 @@ export function assignGlobalSpeakers(
     groupToGlobal[g] = `Speaker ${String.fromCharCode(65 + i)}`;
   });
 
-  // Display name: specific LLM label if available, else the global id.
+  // Display name: specific LLM label if available, else the global id. A label
+  // claimed by 2+ groups (a blocked merge — the LLM stamped one person's name on
+  // several real voices) is CONTESTED: nobody gets it. Guessing by talk time put
+  // "Hrishi Olickel" on the wrong cluster in live testing; the identify pass, which
+  // sees voice anchors + address direction, is the naming authority for those.
+  const labelGroupCount: Record<string, number> = {};
+  for (const g of groupsByTalk) {
+    const label = groupLabel[g]!;
+    if (!isGenericLabel(label)) labelGroupCount[label] = (labelGroupCount[label] ?? 0) + 1;
+  }
   const displayNames: Record<string, string> = {};
   for (const g of groupsByTalk) {
     const label = groupLabel[g]!;
-    displayNames[groupToGlobal[g]!] = isGenericLabel(label) ? groupToGlobal[g]! : label;
+    const contested = (labelGroupCount[label] ?? 0) > 1;
+    displayNames[groupToGlobal[g]!] =
+      isGenericLabel(label) || contested ? groupToGlobal[g]! : label;
   }
 
   // LLM label → global speaker (for identification).

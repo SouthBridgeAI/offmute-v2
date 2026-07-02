@@ -65,6 +65,8 @@ export interface PipelineOptions {
   formats?: OutputFormat[];
   /** Markdown layout: merged same-speaker paragraphs (default) or one block per turn. */
   mdStyle?: "merged" | "turns";
+  /** Write a meeting summary (<name>.summary.md) via the reasoner. Default false. */
+  summary?: boolean;
   /** Target diarization level. */
   diarizationLevel?: 1 | 2 | 3;
   /** Injected API keys (override env). */
@@ -93,7 +95,7 @@ export interface PipelineOptions {
   signal?: AbortSignal;
 }
 
-export type OutputFormat = "srt" | "md" | "json" | "txt";
+export type OutputFormat = "srt" | "md" | "json" | "txt" | "html";
 
 export type TimestampedProvider = "assemblyai" | "elevenlabs" | "whisper-groq" | "none";
 
@@ -210,6 +212,7 @@ export function resolveOptions(
     saveIntermediates: opts.saveIntermediates ?? true,
     formats: opts.formats ?? ["md"],
     mdStyle: opts.mdStyle ?? "merged",
+    summary: opts.summary ?? false,
     diarizationLevel: opts.diarizationLevel ?? 2,
     identifyMode: opts.identifyMode ?? "dual",
     apiKeys: opts.apiKeys,

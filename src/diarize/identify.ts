@@ -50,6 +50,8 @@ export function identifyPrompt(transcriptExcerpt: string, roster: string, knownS
 
 Identify each speaker by name and/or role using content cues: self-introductions ("my name is X"), references to themselves, their role, or context. If you cannot confidently identify a speaker, leave the name empty ("").
 
+CRITICAL — direction of address: when a speaker says a name, work out whether they are talking ABOUT themselves or TO someone else. "Thanks, Rishi" or "I'm stealing your update, Rishi" is spoken TO Rishi — so that speaker is NOT Rishi, and Rishi is one of the OTHER speakers. Only first-person statements ("I'm Rishi", "my name is...") identify the speaker themselves. Misreading address direction is the most common error in this task.
+
 ${knownSpeakers && knownSpeakers.length ? `Known possible speakers: ${knownSpeakers.join(", ")}\n` : ""}ROSTER:
 ${roster}
 
@@ -73,7 +75,9 @@ export async function identifySpeakers(
   const { data, error } = await client.chatJson<{ speakers: IdentifiedSpeaker[]; reasoning: string }>(
     model,
     [{ role: "user", content: identifyPrompt(excerpt, roster, knownSpeakers) }],
-    { temperature: 0.1, maxTokens: 2000, logKind: "identify" },
+    // 4000 tokens: verbose models quote long verbatim evidence — a 2000 cap truncated
+    // mid-JSON and silently emptied a whole identify pass (observed live).
+    { temperature: 0.1, maxTokens: 4000, logKind: "identify" },
   );
   if (error || !data) {
     return { nameMap: {}, speakers: [], reasoning: error || "no response" };

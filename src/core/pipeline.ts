@@ -55,10 +55,13 @@ import {
 import { alignSegments, type AlignedSegment } from "../align/aligner.js";
 import { fillAsrGaps } from "../align/fill-gaps.js";
 import { assignGlobalSpeakers } from "../diarize/consistency.js";
+import { splitMixedVoiceSegments } from "../diarize/split-mixed.js";
 import { identifySpeakersV2 } from "../diarize/identify2.js";
 import { resolveReasoner, resolveSecondReasoner } from "../providers/reasoner.js";
 import { finalizeSegments } from "../finalize/finalize.js";
 import { formatSrt, formatMarkdown, formatText, formatJson } from "../finalize/format.js";
+import { formatHtml } from "../finalize/html.js";
+import { summarizeTranscript } from "../finalize/summary.js";
 import { basename, resolve } from "node:path";
 
 const JSON_OPTS = { encoding: "utf-8" } as const;
@@ -576,6 +579,17 @@ export async function transcribe(opts: PipelineOptions): Promise<TranscriptResul
     if (added) logger.info(`gap-filled ${added} ASR fallback segment(s)`);
   }
 
+  // ---------- 5.6 SPLIT MIXED-VOICE SEGMENTS ----------
+  // LLM mega-segments can bundle several people's speech under one label; word-level
+  // ASR timing exposes the voice boundaries, so split there before consistency votes.
+  if (
+    asrResult &&
+    (asrResult.hasDiarization ?? true) &&
+    (has(passes, "align") || has(passes, "consistency"))
+  ) {
+    aligned = splitMixedVoiceSegments(aligned, asrResult.utterances);
+  }
+
   // ---------- 6. CONSISTENCY ----------
   let segments = aligned;
   let speakers: TranscriptResult["speakers"] = [];
@@ -705,8 +719,37 @@ export async function transcribe(opts: PipelineOptions): Promise<TranscriptResul
         `${options.outputDir}/${base}.txt`,
         formatText(result, { title: base }),
       );
+    if (fmt === "html")
+      writeFileSync(
+        `${options.outputDir}/${base}.html`,
+        formatHtml(result, { title: base }),
+      );
     if (fmt === "json")
       writeFileSync(`${options.outputDir}/${base}.json`, formatJson(result));
+  }
+
+  // ---------- 9. SUMMARY (optional) ----------
+  if (options.summary && finalSegments.length > 0) {
+    const reasoner = resolveReasoner(options.reasoner ?? DEFAULT_REASONER_MODEL, keys);
+    if (!reasoner) {
+      logger.warn("summary: no reasoner-capable key — skipping");
+    } else {
+      logger.info(`=== summary (${reasoner.info.model}) ===`);
+      try {
+        const summary = await summarizeTranscript(
+          reasoner.client,
+          reasoner.info.model,
+          result,
+          options.instructions,
+        );
+        const base = basename(options.input, ext(options.input));
+        writeFileSync(`${options.outputDir}/${base}.summary.md`, summary);
+        logger.info(`summary written to ${base}.summary.md`);
+      } catch (err) {
+        // A failed summary must never sink a finished transcription.
+        logger.warn(`summary failed: ${err instanceof Error ? err.message : err}`);
+      }
+    }
   }
   // The run completed — the coarse partial is superseded by the real outputs.
   try {
