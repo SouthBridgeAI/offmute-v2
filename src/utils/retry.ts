@@ -17,7 +17,9 @@ export async function withRetry<T>(
   fn: () => Promise<T>,
   opts: { retries?: number; baseDelayMs?: number } = {},
 ): Promise<T> {
-  const retries = opts.retries ?? 3;
+  // 5 retries × exponential backoff ≈ a ~90s outage envelope — network blips that
+  // kill uploads (observed repeatedly) often outlast a couple of quick retries.
+  const retries = opts.retries ?? 5;
   const base = opts.baseDelayMs ?? 2000;
   let lastErr: unknown;
   for (let attempt = 0; attempt <= retries; attempt++) {
