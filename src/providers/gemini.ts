@@ -9,6 +9,7 @@ import { GoogleGenAI, type File, type Part } from "@google/genai";
 import { basename } from "node:path";
 import { logger } from "../utils/logger.js";
 import { logLlmCall } from "./llm-log.js";
+import { withRetry } from "../utils/retry.js";
 
 export interface GeminiFileInput {
   path: string;
@@ -102,11 +103,15 @@ export class GeminiClient {
     this.ai = new GoogleGenAI({ apiKey });
   }
 
-  /** Upload a file and wait until it's done processing. */
+  /** Upload a file and wait until it's done processing. Uploads ride one long HTTP
+   * request each — the retry loop in generate() doesn't cover them, and transient
+   * "fetch failed" blips here killed live runs, so they get their own retry. */
   async upload(path: string, mimeType?: string): Promise<File> {
     const mt = mimeType || detectMime(path);
     logger.debug(`[gemini] uploading ${basename(path)} (${mt})...`);
-    let file = await this.ai.files.upload({ file: path, config: { mimeType: mt } });
+    let file = await withRetry(`gemini upload ${basename(path)}`, () =>
+      this.ai.files.upload({ file: path, config: { mimeType: mt } }),
+    );
     // Poll until ACTIVE (Gemini must process audio/video before generation).
     let tries = 0;
     while (file.state === "PROCESSING" && tries < 120) {
