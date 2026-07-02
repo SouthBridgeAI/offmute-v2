@@ -9,6 +9,7 @@
  */
 import type { TimestampedUtterance, TimestampedWord } from "../core/types.js";
 import type { TimestampedResult } from "./whisper-groq.js";
+import { withRetry } from "../utils/retry.js";
 
 interface ScribeWord {
   text: string;
@@ -56,16 +57,18 @@ export class ElevenLabsClient {
     if (opts.numSpeakers) form.append("num_speakers", String(opts.numSpeakers));
     for (const term of opts.keyterms ?? []) form.append("keyterms", term);
 
-    const res = await fetch(`${this.baseUrl}/speech-to-text`, {
-      method: "POST",
-      headers: { "xi-api-key": this.apiKey },
-      body: form,
+    const data = await withRetry("elevenlabs", async () => {
+      const res = await fetch(`${this.baseUrl}/speech-to-text`, {
+        method: "POST",
+        headers: { "xi-api-key": this.apiKey },
+        body: form,
+      });
+      if (!res.ok) {
+        const txt = await res.text();
+        throw new Error(`ElevenLabs Scribe ${res.status}: ${txt.slice(0, 300)}`);
+      }
+      return (await res.json()) as ScribeResponse;
     });
-    if (!res.ok) {
-      const txt = await res.text();
-      throw new Error(`ElevenLabs Scribe ${res.status}: ${txt.slice(0, 300)}`);
-    }
-    const data = (await res.json()) as ScribeResponse;
 
     const words: (TimestampedWord & { speaker: string })[] = [];
     for (const w of data.words ?? []) {

@@ -10,6 +10,7 @@ import { existsSync } from "node:fs";
 import { dirname } from "node:path";
 import type { TimestampedUtterance, TimestampedWord } from "../core/types.js";
 import { logger } from "../utils/logger.js";
+import { withRetry } from "../utils/retry.js";
 
 /** A word/utterance token from the AssemblyAI transcript response. */
 interface AaiWord {
@@ -72,7 +73,11 @@ export class AssemblyAIProvider {
     }
 
     logger.info(`[assemblyai] uploading ${filePath}...`);
-    const uploadUrl = await this.client.files.upload(filePath);
+    // Uploads of large files ride a single long HTTP request — the most likely place
+    // for a transient network blip to land (observed live: "fetch failed" mid-upload).
+    const uploadUrl = await withRetry("assemblyai upload", () =>
+      this.client.files.upload(filePath),
+    );
     logger.info(`[assemblyai] transcribing (speech_model=${this.speechModel})...`);
     const params: TranscribeParams = {
       audio: uploadUrl,
@@ -81,7 +86,9 @@ export class AssemblyAIProvider {
     };
     if (this.speakersExpected) params.speakers_expected = this.speakersExpected;
 
-    const transcript = await this.client.transcripts.transcribe(params);
+    const transcript = await withRetry("assemblyai transcribe", () =>
+      this.client.transcripts.transcribe(params),
+    );
     if (transcript.status === "error") {
       throw new Error(`AssemblyAI error: ${transcript.error}`);
     }
