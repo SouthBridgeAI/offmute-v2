@@ -31,6 +31,113 @@ function timeOverlapFrac(a: { start: number; end: number }, b: { start: number; 
   return shorter > 0 ? ov / shorter : 0;
 }
 
+const SEAM_WINDOW = 250; // tokens examined on each side of a candidate seam
+const SEAM_MIN_TOKENS = 6;
+const SEAM_MIN_SCORE_RATIO = 0.5; // matches must clearly outweigh edits
+
+/**
+ * Overlap alignment (suffix of A vs prefix of B): free leading gap in A, free trailing
+ * gap in B; +1 match / −1 mismatch/indel. Returns the aligned span, or null when no
+ * window scores well enough to be a duplicate.
+ */
+export function suffixPrefixOverlap(
+  a: string[],
+  b: string[],
+): { aStart: number; bLen: number } | null {
+  const n = a.length;
+  const m = b.length;
+  if (n === 0 || m === 0) return null;
+  // dp[i][j]: best score aligning some suffix of a[0..i) to exactly b[0..j).
+  // origin[i][j]: where that suffix starts in `a`.
+  const dp: number[][] = Array.from({ length: n + 1 }, () => new Array(m + 1).fill(0));
+  const origin: number[][] = Array.from({ length: n + 1 }, () => new Array(m + 1).fill(0));
+  for (let i = 0; i <= n; i++) {
+    dp[i]![0] = 0; // leading gap in `a` is free
+    origin[i]![0] = i;
+  }
+  for (let j = 1; j <= m; j++) {
+    dp[0]![j] = -j;
+    origin[0]![j] = 0;
+  }
+  for (let i = 1; i <= n; i++) {
+    for (let j = 1; j <= m; j++) {
+      const diag = dp[i - 1]![j - 1]! + (a[i - 1] === b[j - 1] ? 1 : -1);
+      const up = dp[i - 1]![j]! - 1;
+      const left = dp[i]![j - 1]! - 1;
+      if (diag >= up && diag >= left) {
+        dp[i]![j] = diag;
+        origin[i]![j] = origin[i - 1]![j - 1]!;
+      } else if (up >= left) {
+        dp[i]![j] = up;
+        origin[i]![j] = origin[i - 1]![j]!;
+      } else {
+        dp[i]![j] = left;
+        origin[i]![j] = origin[i]![j - 1]!;
+      }
+    }
+  }
+  // The duplicate must reach a's END (that's where the seam truncated it); b may
+  // continue past it (free trailing gap) — take the best j at i = n.
+  let bestJ = 0;
+  let bestScore = -Infinity;
+  for (let j = 1; j <= m; j++) {
+    if (dp[n]![j]! > bestScore) {
+      bestScore = dp[n]![j]!;
+      bestJ = j;
+    }
+  }
+  if (bestJ < SEAM_MIN_TOKENS) return null;
+  if (bestScore < bestJ * SEAM_MIN_SCORE_RATIO) return null;
+  return { aStart: origin[n]![bestJ]!, bLen: bestJ };
+}
+
+/**
+ * Trim chunk-seam duplicates. Ownership partitioning drops whole segments in the
+ * overlap zone, but a MEGA-segment that spans the boundary survives in both chunks:
+ * chunk N's copy ends truncated mid-sentence, chunk N+1's re-covers the same speech in
+ * full before continuing (observed live on the SuperAI panel). The duplicate is a
+ * suffix of the earlier segment ≈ a prefix of the later one — located by overlap
+ * alignment (order-sensitive, tolerant of word-level diffs) and trimmed from the
+ * EARLIER copy, keeping the later chunk's fuller version (the ipgu convention).
+ * Same-speaker only, so genuine cross-talk is untouched.
+ */
+export function trimSeamOverlaps(segments: AlignedSegment[]): AlignedSegment[] {
+  const sorted = [...segments].sort((a, b) => a.start - b.start);
+  const lastIdxBySpeaker = new Map<string, number>();
+  const out: (AlignedSegment | null)[] = [];
+  for (const seg of sorted) {
+    const prevIdx = lastIdxBySpeaker.get(seg.speaker);
+    const prev = prevIdx !== undefined ? out[prevIdx] : undefined;
+    if (prev && prev.words?.length && seg.words?.length) {
+      const prevWin = Math.min(SEAM_WINDOW, prev.words.length);
+      const prevToks = prev.words
+        .slice(-prevWin)
+        .map((w) => tokenize(w.text)[0]?.norm ?? "");
+      const segToks = seg.words
+        .slice(0, SEAM_WINDOW)
+        .map((w) => tokenize(w.text)[0]?.norm ?? "");
+      const hit = suffixPrefixOverlap(prevToks, segToks);
+      if (hit) {
+        const trimFrom = prev.words.length - prevWin + hit.aStart;
+        const kept = prev.words.slice(0, trimFrom);
+        if (kept.length === 0) {
+          out[prevIdx!] = null; // earlier copy entirely re-covered
+        } else {
+          out[prevIdx!] = {
+            ...prev,
+            words: kept,
+            end: kept[kept.length - 1]!.end,
+            text: kept.map((w) => w.text).join(" "),
+          };
+        }
+      }
+    }
+    out.push(seg);
+    lastIdxBySpeaker.set(seg.speaker, out.length - 1);
+  }
+  return out.filter((s): s is AlignedSegment => s !== null);
+}
+
 /** Drop near-duplicate segments (chunk overlap transcribed twice). Keeps the higher-confidence one. */
 export function dedupSegments(segments: AlignedSegment[]): AlignedSegment[] {
   const sorted = [...segments].sort((a, b) => a.start - b.start);
@@ -109,7 +216,7 @@ export function finalizeSegments(
   opts: FinalizeOptions = {},
 ): Segment[] {
   const minSeg = opts.minSegmentSec ?? 0.2;
-  let deduped = dedupSegments(segments);
+  let deduped = dedupSegments(trimSeamOverlaps(segments));
   // Drop trivially short / empty segments.
   deduped = deduped.filter((s) => s.end - s.start >= minSeg && s.text.trim().length > 0);
 
