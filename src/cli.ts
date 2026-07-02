@@ -1,6 +1,10 @@
 #!/usr/bin/env node
 /**
  * offmute-v2 CLI entry point.
+ *
+ * `offmute-v2 <input> [options]` transcribes (default command); subcommands:
+ *   models — the model matrix and what your keys unlock
+ *   doctor — environment + key + API health check
  */
 import { Command } from "commander";
 import { readFileSync } from "node:fs";
@@ -8,6 +12,8 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { transcribe } from "./core/pipeline.js";
 import type { Pass } from "./core/config.js";
+import { runModels } from "./commands/models.js";
+import { runDoctor } from "./commands/doctor.js";
 
 let packageVersion = "0.0.0";
 try {
@@ -23,79 +29,108 @@ const program = new Command();
 program
   .name("offmute-v2")
   .description("Diarized meeting transcription with multimodal LLMs + timestamped alignment.")
-  .version(packageVersion)
-  .argument("<input>", "input video/audio file")
-  .option("-o, --output <dir>", "output directory (default: next to the input file)")
-  .option(
-    "-i, --intermediates <dir>",
-    "intermediates directory (default: auto-derived per input file so caches never collide)",
-  )
-  .option("--instructions <text>", "custom instructions for the LLM")
-  .option("--passes <list>", "comma-separated passes to run")
-  .option("--chunk-seconds <n>", "chunk duration in seconds", "600")
-  .option("--overlap-seconds <n>", "chunk overlap in seconds", "60")
-  .option("--concurrency <n>", "max concurrent chunk requests", "4")
-  .option("--screenshots <n>", "number of keyframes to extract (video)", "6")
-  .option("--formats <list>", "output formats: srt,md,txt,json (default: md)")
-  .option("--md-style <style>", "markdown layout: merged (paragraphs) | turns", "merged")
-  .option("--speakers <names>", "known speaker names, comma-separated (guides identification)")
-  .option("--level <1|2|3>", "diarization level (1=separation, 2=consistent, 3=identify)", "2")
-  .option("--model <name>", "override transcription model")
-  .option("--reasoner <name>", "override text-reasoner model (default deepseek-chat)")
-  .option("--timestamped <provider>", "timestamped provider (assemblyai|whisper-groq|none)")
-  .option("--force", "force reprocess cached chunk outputs", false)
-  .option("--only-chunk <n>", "process only a specific chunk index (debug)")
-  .option("--save-intermediates", "save intermediates (default true)", true)
-  .option("--no-progress", "hide progress output")
-  .option("--no-llm-log", "disable per-call LLM logging to <intermediates>/llm-calls.jsonl")
-  .option("--log-level <level>", "debug | info | warn | error", "info");
+  .version(packageVersion);
 
-program.parse();
-const opts = program.opts();
-
-const input = program.args[0];
-if (!input) {
-  console.error("Error: input file is required.");
-  process.exit(1);
+interface TranscribeCliOpts {
+  output?: string;
+  intermediates?: string;
+  instructions?: string;
+  passes?: string;
+  chunkSeconds: string;
+  overlapSeconds: string;
+  concurrency: string;
+  screenshots: string;
+  formats?: string;
+  mdStyle?: "merged" | "turns";
+  speakers?: string;
+  level: string;
+  model?: string;
+  reasoner?: string;
+  timestamped?: "assemblyai" | "elevenlabs" | "whisper-groq" | "none";
+  force: boolean;
+  onlyChunk?: string;
+  saveIntermediates: boolean;
+  progress: boolean;
+  llmLog: boolean;
+  logLevel: string;
 }
 
-const passes = (opts.passes as string | undefined)?.split(",") as Pass[] | undefined;
-let level = parseInt(opts.level, 10) as 1 | 2 | 3;
-// Providing known speakers means the user wants names — implies the identify pass.
-if (opts.speakers && level < 3) level = 3;
+async function runTranscribe(input: string, opts: TranscribeCliOpts): Promise<void> {
+  const passes = opts.passes?.split(",") as Pass[] | undefined;
+  let level = parseInt(opts.level, 10) as 1 | 2 | 3;
+  // Providing known speakers means the user wants names — implies the identify pass.
+  if (opts.speakers && level < 3) level = 3;
 
-transcribe({
-  input,
-  outputDir: opts.output, // undefined → defaults to the input file's directory
-  intermediatesDir: opts.intermediates,
-  instructions: opts.instructions,
-  passes,
-  chunkDurationSec: parseInt(opts.chunkSeconds, 10),
-  chunkOverlapSec: parseInt(opts.overlapSeconds, 10),
-  concurrency: parseInt(opts.concurrency, 10),
-  screenshotCount: parseInt(opts.screenshots, 10),
-  formats: opts.formats ? opts.formats.split(",") : undefined, // undefined → defaults to ["md"]
-  mdStyle: opts.mdStyle,
-  knownSpeakers: opts.speakers
-    ? (opts.speakers as string).split(",").map((s: string) => s.trim()).filter(Boolean)
-    : undefined,
-  diarizationLevel: level,
-  model: opts.model,
-  reasoner: opts.reasoner,
-  timestampedProvider: opts.timestamped,
-  force: opts.force,
-  onlyChunk: opts.onlyChunk ? parseInt(opts.onlyChunk, 10) : undefined,
-  saveIntermediates: opts.saveIntermediates,
-  showProgress: opts.progress,
-  llmLog: opts.llmLog,
-  logLevel: opts.logLevel,
-})
-  .then((result) => {
-    // Result-writing is handled inside finalize in the real pipeline.
-    const segs = result.segments.length;
-    console.log(`Done. ${segs} segments.`);
-  })
-  .catch((err) => {
+  const result = await transcribe({
+    input,
+    outputDir: opts.output, // undefined → defaults to the input file's directory
+    intermediatesDir: opts.intermediates,
+    instructions: opts.instructions,
+    passes,
+    chunkDurationSec: parseInt(opts.chunkSeconds, 10),
+    chunkOverlapSec: parseInt(opts.overlapSeconds, 10),
+    concurrency: parseInt(opts.concurrency, 10),
+    screenshotCount: parseInt(opts.screenshots, 10),
+    formats: opts.formats
+      ? (opts.formats.split(",") as ("srt" | "md" | "json" | "txt")[])
+      : undefined, // undefined → defaults to ["md"]
+    mdStyle: opts.mdStyle,
+    knownSpeakers: opts.speakers
+      ? opts.speakers.split(",").map((s) => s.trim()).filter(Boolean)
+      : undefined,
+    diarizationLevel: level,
+    model: opts.model,
+    reasoner: opts.reasoner,
+    timestampedProvider: opts.timestamped,
+    force: opts.force,
+    onlyChunk: opts.onlyChunk ? parseInt(opts.onlyChunk, 10) : undefined,
+    saveIntermediates: opts.saveIntermediates,
+    showProgress: opts.progress,
+    llmLog: opts.llmLog,
+    logLevel: opts.logLevel as "debug" | "info" | "warn" | "error",
+  });
+  console.log(`Done. ${result.segments.length} segments.`);
+}
+
+function addTranscribeOptions(cmd: Command): Command {
+  return cmd
+    .option("-o, --output <dir>", "output directory (default: next to the input file)")
+    .option(
+      "-i, --intermediates <dir>",
+      "intermediates directory (default: auto-derived per input file so caches never collide)",
+    )
+    .option("--instructions <text>", "custom instructions for the LLM")
+    .option("--passes <list>", "comma-separated passes to run")
+    .option("--chunk-seconds <n>", "chunk duration in seconds", "600")
+    .option("--overlap-seconds <n>", "chunk overlap in seconds", "60")
+    .option("--concurrency <n>", "max concurrent chunk requests", "4")
+    .option("--screenshots <n>", "number of keyframes to extract (video)", "6")
+    .option("--formats <list>", "output formats: srt,md,txt,json (default: md)")
+    .option("--md-style <style>", "markdown layout: merged (paragraphs) | turns", "merged")
+    .option("--speakers <names>", "known speaker names, comma-separated (implies --level 3)")
+    .option("--level <1|2|3>", "diarization level (1=separation, 2=consistent, 3=identify)", "2")
+    .option("--model <name>", "override transcription model")
+    .option("--reasoner <name>", "override text-reasoner model (default deepseek-chat)")
+    .option(
+      "--timestamped <provider>",
+      "timestamped provider (assemblyai|elevenlabs|whisper-groq|none)",
+    )
+    .option("--force", "force reprocess cached chunk outputs", false)
+    .option("--only-chunk <n>", "process only a specific chunk index (debug)")
+    .option("--save-intermediates", "save intermediates (default true)", true)
+    .option("--no-progress", "hide progress output")
+    .option("--no-llm-log", "disable per-call LLM logging to <intermediates>/llm-calls.jsonl")
+    .option("--log-level <level>", "debug | info | warn | error", "info");
+}
+
+addTranscribeOptions(
+  program
+    .command("transcribe <input>", { isDefault: true })
+    .description("transcribe a video/audio file (default command)"),
+).action(async (input: string, opts: TranscribeCliOpts) => {
+  try {
+    await runTranscribe(input, opts);
+  } catch (err) {
     // Print a clean, single-line message for expected errors (missing keys/ffmpeg/input,
     // bad model, network). The full stack is only shown in debug mode (or OFFMUTE_DEBUG).
     const msg = err instanceof Error ? err.message : String(err);
@@ -104,4 +139,17 @@ transcribe({
       console.error(err instanceof Error ? err.stack : err);
     }
     process.exit(1);
-  });
+  }
+});
+
+program
+  .command("models")
+  .description("list model presets per role and what your keys unlock")
+  .action(runModels);
+
+program
+  .command("doctor")
+  .description("check ffmpeg, API keys, and provider reachability")
+  .action(runDoctor);
+
+program.parse();

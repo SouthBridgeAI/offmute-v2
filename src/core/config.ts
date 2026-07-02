@@ -32,7 +32,7 @@ export interface ModelAssignment {
   /** Multimodal transcription (per chunk). Needs native audio. */
   transcribe: string;
   /** Timestamped whole-file transcription. */
-  timestamped: "assemblyai" | "whisper-groq" | "whisper-openai" | "gemini" | "none";
+  timestamped: TimestampedProvider;
   /** Text reasoning passes (description, speaker ID, refinement). */
   reasoner: string;
 }
@@ -74,7 +74,7 @@ export interface PipelineOptions {
   /** Override the text-reasoner model (identification pass). */
   reasoner?: string;
   /** Timestamped provider. */
-  timestampedProvider?: "assemblyai" | "whisper-groq" | "none";
+  timestampedProvider?: TimestampedProvider;
   /** Force reprocessing of cached chunk outputs. */
   force?: boolean;
   /** Process only a specific chunk index (debugging). */
@@ -91,6 +91,8 @@ export interface PipelineOptions {
 }
 
 export type OutputFormat = "srt" | "md" | "json" | "txt";
+
+export type TimestampedProvider = "assemblyai" | "elevenlabs" | "whisper-groq" | "none";
 
 export type Pass =
   | "preprocess"

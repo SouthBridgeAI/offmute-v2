@@ -41,6 +41,7 @@ import {
 import { GeminiClient } from "../providers/gemini.js";
 import { AssemblyAIProvider } from "../providers/assemblyai.js";
 import { WhisperGroqClient } from "../providers/whisper-groq.js";
+import { ElevenLabsClient } from "../providers/elevenlabs.js";
 import { setLlmLogPath } from "../providers/llm-log.js";
 import { describeMeeting, type MeetingDescription } from "../transcribe/describe.js";
 import {
@@ -190,11 +191,14 @@ export async function transcribe(opts: PipelineOptions): Promise<TranscriptResul
   if (willTimestamp) {
     if (tsProvider === "assemblyai" && !keys.assemblyai) {
       throw new Error(
-        "ASSEMBLYAI_API_KEY is required for the timestamped pass (or use --timestamped whisper-groq)",
+        "ASSEMBLYAI_API_KEY is required for the timestamped pass (or use --timestamped elevenlabs / whisper-groq)",
       );
     }
     if (tsProvider === "whisper-groq" && !keys.groq) {
       throw new Error("GROQ_API_KEY is required for --timestamped whisper-groq");
+    }
+    if (tsProvider === "elevenlabs" && !keys.elevenlabs) {
+      throw new Error("ELEVENLABS_API_KEY is required for --timestamped elevenlabs");
     }
   }
 
@@ -491,6 +495,26 @@ export async function transcribe(opts: PipelineOptions): Promise<TranscriptResul
       const groq = new WhisperGroqClient(keys.groq!);
       asrResult = await groq.transcribe(buf).catch(stageTag("asr"));
       writeJson(`${options.intermediatesDir}/timestamped.json`, asrResult);
+    } else if (provider === "elevenlabs") {
+      logger.info("=== timestamped (ElevenLabs Scribe v2) ===");
+      if (!keys.elevenlabs)
+        throw new Error("ELEVENLABS_API_KEY is required for --timestamped elevenlabs");
+      // Cache by provider — switching providers must not serve the other one's clock.
+      const cachePath = `${options.intermediatesDir}/timestamped-elevenlabs.json`;
+      asrResult = forceAll ? null : readJson(cachePath);
+      if (!asrResult) {
+        const { readFile } = await import("node:fs/promises");
+        const buf = await readFile(audioPath);
+        const el = new ElevenLabsClient(keys.elevenlabs!);
+        asrResult = await el.transcribe(buf).catch(stageTag("asr"));
+        writeJson(cachePath, asrResult);
+      } else {
+        logger.info("[elevenlabs] cache hit");
+      }
+      writeJson(`${options.intermediatesDir}/timestamped.json`, asrResult);
+      logger.info(
+        `[elevenlabs] ${asrResult.utterances.length} utterances, ${asrResult.words.length} words, ${(asrResult as { speakers?: string[] }).speakers?.length ?? "?"} speakers`,
+      );
     } else {
       logger.info("=== timestamped (AssemblyAI) ===");
       if (!keys.assemblyai)
@@ -614,9 +638,11 @@ export async function transcribe(opts: PipelineOptions): Promise<TranscriptResul
       timestamped:
         tsProvider === "whisper-groq"
           ? "whisper-large-v3 (groq)"
-          : tsProvider === "none"
-            ? "none"
-            : "assemblyai-universal-2",
+          : tsProvider === "elevenlabs"
+            ? "scribe-v2 (elevenlabs)"
+            : tsProvider === "none"
+              ? "none"
+              : "assemblyai-universal-2",
     },
     passes,
   };
