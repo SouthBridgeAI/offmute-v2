@@ -26,6 +26,19 @@ export interface LlmLogEntry {
 
 let logPath: string | null = null;
 
+/** In-memory usage collector for the current run (powers the cost receipt).
+ * Collected regardless of whether file logging is enabled. */
+export interface LlmUsageRecord {
+  provider: string;
+  model: string;
+  kind?: string;
+  inputTokens: number;
+  outputTokens: number;
+  calls: number;
+  errors: number;
+}
+let usageRecords: Map<string, LlmUsageRecord> = new Map();
+
 /** Set the destination JSONL path (call once at pipeline start). Pass null/undefined to disable. */
 export function setLlmLogPath(path: string | null | undefined): void {
   logPath = path ?? null;
@@ -35,8 +48,38 @@ export function llmLogPath(): string | null {
   return logPath;
 }
 
-/** Append an LLM call record. No-op if no path is set. Best-effort (never throws). */
+/** Reset the per-run usage collector (call at pipeline start). */
+export function resetLlmUsage(): void {
+  usageRecords = new Map();
+}
+
+/** Aggregated usage by model+kind for the current run. */
+export function getLlmUsage(): LlmUsageRecord[] {
+  return [...usageRecords.values()];
+}
+
+/** Append an LLM call record. File write is a no-op if no path is set; usage is
+ * always collected in memory. Best-effort (never throws). */
 export function logLlmCall(entry: LlmLogEntry): void {
+  try {
+    const key = `${entry.model}|${entry.kind ?? ""}`;
+    const rec = usageRecords.get(key) ?? {
+      provider: entry.provider,
+      model: entry.model,
+      kind: entry.kind,
+      inputTokens: 0,
+      outputTokens: 0,
+      calls: 0,
+      errors: 0,
+    };
+    rec.inputTokens += entry.usage?.inputTokens ?? 0;
+    rec.outputTokens += entry.usage?.outputTokens ?? 0;
+    rec.calls += 1;
+    if (entry.error) rec.errors += 1;
+    usageRecords.set(key, rec);
+  } catch {
+    /* never break the pipeline */
+  }
   if (!logPath) return;
   try {
     appendFileSync(logPath, JSON.stringify(entry) + "\n", { encoding: "utf-8" });

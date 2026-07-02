@@ -42,7 +42,9 @@ import { GeminiClient } from "../providers/gemini.js";
 import { AssemblyAIProvider } from "../providers/assemblyai.js";
 import { WhisperGroqClient } from "../providers/whisper-groq.js";
 import { ElevenLabsClient } from "../providers/elevenlabs.js";
-import { setLlmLogPath } from "../providers/llm-log.js";
+import { setLlmLogPath, resetLlmUsage, getLlmUsage } from "../providers/llm-log.js";
+import { estimateRunCost, computeReceipt, PRICES_AS_OF } from "./pricing.js";
+import { recordRun } from "./stats.js";
 import { describeMeeting, type MeetingDescription } from "../transcribe/describe.js";
 import {
   transcribeChunk,
@@ -137,6 +139,8 @@ export async function transcribe(opts: PipelineOptions): Promise<TranscriptResul
   );
   // Log every LLM call (prompt + response + usage + timing) for validation.
   setLlmLogPath(options.llmLog ? `${options.intermediatesDir}/llm-calls.jsonl` : null);
+  resetLlmUsage();
+  const runStartedAt = Date.now();
 
   // Input-identity manifest: if the file at this path changed (different size/mtime, or
   // a different file now occupies the path), invalidate ALL caches automatically. This
@@ -239,6 +243,20 @@ export async function transcribe(opts: PipelineOptions): Promise<TranscriptResul
   }
   if (!probeInfo) throw new Error("probe info missing (run preprocess)");
   const duration = probeInfo.duration;
+
+  // Predictive cost: printed before any paid call, so surprises happen up front.
+  const estimate = estimateRunCost({
+    durationSec: duration,
+    model: models.transcribe,
+    reasoner: models.reasoner,
+    tsProvider,
+    chunkSec: options.chunkDurationSec,
+    overlapSec: options.chunkOverlapSec,
+    identify: options.diarizationLevel >= 3 && has(passes, "identify"),
+  });
+  logger.info(
+    `estimated cost ~$${estimate.totalUsd.toFixed(2)}${estimate.incomplete ? " (+unpriced parts)" : ""}  [${estimate.lines.join(" · ")}]`,
+  );
 
   // ---------- 2. DESCRIBE ----------
   let description: MeetingDescription | null = null;
@@ -629,6 +647,8 @@ export async function transcribe(opts: PipelineOptions): Promise<TranscriptResul
   logger.info(`final segments: ${finalSegments.length}`);
 
   // ---------- 8. FORMAT + WRITE ----------
+  const receipt = computeReceipt(getLlmUsage(), tsProvider, duration);
+  const wallMs = Date.now() - runStartedAt;
   const metadata: TranscriptMetadata = {
     sourceFile: options.input,
     duration,
@@ -645,6 +665,16 @@ export async function transcribe(opts: PipelineOptions): Promise<TranscriptResul
               : "assemblyai-universal-2",
     },
     passes,
+    wallMs,
+    cost: {
+      estimatedUsd: estimate.totalUsd,
+      actualUsd: receipt.totalUsd,
+      pricesAsOf: PRICES_AS_OF,
+      lines: receipt.lines,
+      llmCalls: receipt.totals.calls,
+      inputTokens: receipt.totals.inputTokens,
+      outputTokens: receipt.totals.outputTokens,
+    },
   };
   const result: TranscriptResult = { segments: finalSegments, speakers, metadata };
 
@@ -677,6 +707,33 @@ export async function transcribe(opts: PipelineOptions): Promise<TranscriptResul
     /* best-effort */
   }
   logger.info(`outputs written to ${options.outputDir}`);
+
+  // The receipt: what this run actually cost and how long it took.
+  const mins = Math.floor(wallMs / 60000);
+  const secs = Math.round((wallMs % 60000) / 1000);
+  logger.info(
+    `receipt: ${receipt.totals.calls} LLM calls · ${(receipt.totals.inputTokens / 1000).toFixed(0)}k in / ${(receipt.totals.outputTokens / 1000).toFixed(0)}k out · ~$${receipt.totalUsd.toFixed(2)}${receipt.incomplete ? " (+unpriced)" : ""} · ${mins ? `${mins}m` : ""}${secs}s`,
+  );
+  for (const line of receipt.lines) logger.info(`  ${line}`);
+
+  // Lifetime stats (~/.offmute) — best-effort, opt out with OFFMUTE_NO_STATS=1.
+  recordRun(
+    {
+      ts: new Date().toISOString(),
+      input: basename(options.input),
+      durationSec: duration,
+      wallMs,
+      models: metadata.models,
+      segments: finalSegments.length,
+      characters: finalSegments.reduce((n, s) => n + s.text.length, 0),
+      speakers: speakers.length,
+      llmCalls: receipt.totals.calls,
+      inputTokens: receipt.totals.inputTokens,
+      outputTokens: receipt.totals.outputTokens,
+      costUsd: receipt.totalUsd,
+    },
+    receipt.perModel,
+  );
   return result;
 }
 

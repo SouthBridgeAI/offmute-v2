@@ -14,6 +14,9 @@ import { transcribe } from "./core/pipeline.js";
 import type { Pass } from "./core/config.js";
 import { runModels } from "./commands/models.js";
 import { runDoctor } from "./commands/doctor.js";
+import { runStats } from "./commands/stats.js";
+import { notify } from "./utils/notify.js";
+import { basename } from "node:path";
 
 let packageVersion = "0.0.0";
 try {
@@ -53,6 +56,7 @@ interface TranscribeCliOpts {
   progress: boolean;
   llmLog: boolean;
   logLevel: string;
+  notify: boolean;
 }
 
 async function runTranscribe(input: string, opts: TranscribeCliOpts): Promise<void> {
@@ -61,6 +65,7 @@ async function runTranscribe(input: string, opts: TranscribeCliOpts): Promise<vo
   // Providing known speakers means the user wants names — implies the identify pass.
   if (opts.speakers && level < 3) level = 3;
 
+  const t0 = Date.now();
   const result = await transcribe({
     input,
     outputDir: opts.output, // undefined → defaults to the input file's directory
@@ -90,6 +95,11 @@ async function runTranscribe(input: string, opts: TranscribeCliOpts): Promise<vo
     logLevel: opts.logLevel as "debug" | "info" | "warn" | "error",
   });
   console.log(`Done. ${result.segments.length} segments.`);
+  // A run long enough to walk away from earns a ping when it's back.
+  if (opts.notify && Date.now() - t0 > 120_000) {
+    const cost = result.metadata.cost ? ` · ~$${result.metadata.cost.actualUsd.toFixed(2)}` : "";
+    notify("offmute-v2", `${basename(input)} transcribed — ${result.segments.length} segments${cost}`);
+  }
 }
 
 function addTranscribeOptions(cmd: Command): Command {
@@ -120,6 +130,7 @@ function addTranscribeOptions(cmd: Command): Command {
     .option("--save-intermediates", "save intermediates (default true)", true)
     .option("--no-progress", "hide progress output")
     .option("--no-llm-log", "disable per-call LLM logging to <intermediates>/llm-calls.jsonl")
+    .option("--no-notify", "skip the OS notification after long runs")
     .option("--log-level <level>", "debug | info | warn | error", "info");
 }
 
@@ -151,5 +162,10 @@ program
   .command("doctor")
   .description("check ffmpeg, API keys, and provider reachability")
   .action(runDoctor);
+
+program
+  .command("stats")
+  .description("lifetime stats: hours processed, characters, cost by model")
+  .action(runStats);
 
 program.parse();

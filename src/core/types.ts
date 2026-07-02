@@ -99,4 +99,16 @@ export interface TranscriptMetadata {
   processedAt: string;
   models: Record<string, string>;
   passes: string[];
+  /** Wall-clock processing time (ms). */
+  wallMs?: number;
+  /** Cost accounting for this run (list-price estimates, see pricing.ts). */
+  cost?: {
+    estimatedUsd: number;
+    actualUsd: number;
+    pricesAsOf: string;
+    lines: string[];
+    llmCalls: number;
+    inputTokens: number;
+    outputTokens: number;
+  };
 }
