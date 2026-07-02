@@ -15,6 +15,7 @@ import type { Pass } from "./core/config.js";
 import { runModels } from "./commands/models.js";
 import { runDoctor } from "./commands/doctor.js";
 import { runStats } from "./commands/stats.js";
+import { runRename } from "./commands/rename.js";
 import { notify } from "./utils/notify.js";
 import { basename } from "node:path";
 
@@ -47,6 +48,7 @@ interface TranscribeCliOpts {
   mdStyle?: "merged" | "turns";
   speakers?: string;
   level: string;
+  identify?: "dual" | "single";
   model?: string;
   reasoner?: string;
   timestamped?: "assemblyai" | "elevenlabs" | "whisper-groq" | "none";
@@ -84,6 +86,7 @@ async function runTranscribe(input: string, opts: TranscribeCliOpts): Promise<vo
       ? opts.speakers.split(",").map((s) => s.trim()).filter(Boolean)
       : undefined,
     diarizationLevel: level,
+    identifyMode: opts.identify,
     model: opts.model,
     reasoner: opts.reasoner,
     timestampedProvider: opts.timestamped,
@@ -119,6 +122,7 @@ function addTranscribeOptions(cmd: Command): Command {
     .option("--md-style <style>", "markdown layout: merged (paragraphs) | turns", "merged")
     .option("--speakers <names>", "known speaker names, comma-separated (implies --level 3)")
     .option("--level <1|2|3>", "diarization level (1=separation, 2=consistent, 3=identify)", "2")
+    .option("--identify <mode>", "speaker naming: dual (two reasoners, default) | single", "dual")
     .option("--model <name>", "override transcription model")
     .option("--reasoner <name>", "override text-reasoner model (default deepseek-chat)")
     .option(
@@ -167,5 +171,14 @@ program
   .command("stats")
   .description("lifetime stats: hours processed, characters, cost by model")
   .action(runStats);
+
+program
+  .command("rename <result-json> <mappings...>")
+  .description('retcon speaker names without reprocessing, e.g. rename out.json "Speaker B=Ang Li"')
+  .option("--formats <list>", "formats to regenerate next to the json", "md,srt,txt")
+  .option("--md-style <style>", "markdown layout: merged | turns", "merged")
+  .action((jsonPath: string, mappings: string[], opts: { formats: string; mdStyle?: "merged" | "turns" }) => {
+    runRename(jsonPath, mappings, opts);
+  });
 
 program.parse();

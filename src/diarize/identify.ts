@@ -56,8 +56,8 @@ ${roster}
 TRANSCRIPT EXCERPTS BY SPEAKER:
 ${transcriptExcerpt}
 
-Respond as JSON: { "speakers": [ { "id": "<exact speaker id from the headers>", "name": "Full Name or Role", "confidence": "high|medium|low", "evidence": "short quote/reason" } ], "reasoning": "one-paragraph summary" }
-Use the EXACT speaker id strings from the headers above (e.g. "Speaker A").`;
+Respond as JSON: { "speakers": [ { "id": "<exact speaker id from the headers>", "name": "Full Name or Role", "confidence": "high|medium|low", "evidence": "a short quote copied VERBATIM from the excerpts above that supports the name" } ], "reasoning": "one-paragraph summary" }
+Use the EXACT speaker id strings from the headers above (e.g. "Speaker A"). The evidence field must be an exact quote from the transcript excerpts — do not paraphrase it.`;
 }
 
 /** Identify speakers via a text reasoner. Returns a name map (speaker id → name). */

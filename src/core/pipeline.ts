@@ -55,8 +55,8 @@ import {
 import { alignSegments, type AlignedSegment } from "../align/aligner.js";
 import { fillAsrGaps } from "../align/fill-gaps.js";
 import { assignGlobalSpeakers } from "../diarize/consistency.js";
-import { identifySpeakers } from "../diarize/identify.js";
-import { resolveReasoner } from "../providers/reasoner.js";
+import { identifySpeakersV2 } from "../diarize/identify2.js";
+import { resolveReasoner, resolveSecondReasoner } from "../providers/reasoner.js";
 import { finalizeSegments } from "../finalize/finalize.js";
 import { formatSrt, formatMarkdown, formatText, formatJson } from "../finalize/format.js";
 import { basename, resolve } from "node:path";
@@ -604,21 +604,31 @@ export async function transcribe(opts: PipelineOptions): Promise<TranscriptResul
   // (falls back to Gemini, whose key transcription already required), and a missing
   // roster just means less context — not a silently skipped pass.
   if (options.diarizationLevel >= 3 && has(passes, "identify")) {
-    const reasoner = resolveReasoner(options.reasoner ?? DEFAULT_REASONER_MODEL, keys);
-    if (!reasoner) {
+    const reasonerA = resolveReasoner(options.reasoner ?? DEFAULT_REASONER_MODEL, keys);
+    if (!reasonerA) {
       logger.warn(
         "identify: no reasoner-capable API key found (DEEPSEEK/GEMINI/OPENAI/…) — skipping speaker naming",
       );
     } else {
-      logger.info(`=== identify (${reasoner.info.model} via ${reasoner.info.provider}) ===`);
+      const mode = options.identifyMode;
+      const reasonerB =
+        mode === "dual" ? resolveSecondReasoner(reasonerA.info, keys) : null;
+      logger.info(
+        `=== identify (${reasonerA.info.model}${reasonerB ? ` + ${reasonerB.info.model} second opinion` : ""}) ===`,
+      );
       checkAbort();
-      const id = await identifySpeakers(
-        reasoner.client,
-        reasoner.info.model,
+      const id = await identifySpeakersV2(
+        { client: reasonerA.client, model: reasonerA.info.model, provider: reasonerA.info.provider },
+        reasonerB
+          ? { client: reasonerB.client, model: reasonerB.info.model, provider: reasonerB.info.provider }
+          : null,
         segments.map((s) => ({ speaker: s.speaker, text: s.text })),
         speakers,
-        description?.roster ?? "(no roster available — infer from the transcript alone)",
-        options.knownSpeakers,
+        {
+          roster: description?.roster ?? "(no roster available — infer from the transcript alone)",
+          knownSpeakers: options.knownSpeakers,
+          mode,
+        },
       ).catch(stageTag("identify"));
       logger.info(
         `identified ${Object.keys(id.nameMap).length} speakers: ${JSON.stringify(id.nameMap)}`,

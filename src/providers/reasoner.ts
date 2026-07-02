@@ -99,6 +99,29 @@ export function resolveReasoner(
   return null;
 }
 
+/**
+ * Pick a second-opinion reasoner from a DIFFERENT provider family than the first
+ * (a same-family second opinion mostly re-samples the same failure modes).
+ */
+export function resolveSecondReasoner(
+  first: ReasonerInfo,
+  keys: ApiKeys,
+): ResolvedReasoner | null {
+  const candidates = ["gemini-flash-latest", "deepseek-chat", "glm-4.7", "gpt-4o-mini"];
+  for (const c of candidates) {
+    const info = resolveReasonerInfo(c);
+    if (info.provider === first.provider) continue;
+    const key = reasonerKey(info, keys);
+    if (key) {
+      return {
+        client: new OpenAICompatClient(info.baseUrl, key, info.model, info.provider),
+        info,
+      };
+    }
+  }
+  return null;
+}
+
 /** Reasoner presets surfaced by `offmute-v2 models`. */
 export const REASONER_PRESETS: { model: string; note: string }[] = [
   { model: "deepseek-chat", note: "default — cheap, strong text reasoner" },

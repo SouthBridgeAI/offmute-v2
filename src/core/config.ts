@@ -75,6 +75,9 @@ export interface PipelineOptions {
   reasoner?: string;
   /** Timestamped provider. */
   timestampedProvider?: TimestampedProvider;
+  /** Speaker identification mode: "dual" (two reasoners + adjudication, default) or
+   * "single" (one reasoner; the self-introduction tripwire still applies). */
+  identifyMode?: "dual" | "single";
   /** Force reprocessing of cached chunk outputs. */
   force?: boolean;
   /** Process only a specific chunk index (debugging). */
@@ -208,6 +211,7 @@ export function resolveOptions(
     formats: opts.formats ?? ["md"],
     mdStyle: opts.mdStyle ?? "merged",
     diarizationLevel: opts.diarizationLevel ?? 2,
+    identifyMode: opts.identifyMode ?? "dual",
     apiKeys: opts.apiKeys,
     model: opts.model,
     reasoner: opts.reasoner,
