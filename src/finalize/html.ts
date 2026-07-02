@@ -8,12 +8,24 @@ import { formatDuration } from "../utils/time.js";
 import { compactTime } from "./format.js";
 
 const PALETTE = [
-  "#2563eb", "#059669", "#d97706", "#dc2626", "#7c3aed",
-  "#0891b2", "#be185d", "#4d7c0f", "#b45309", "#6d28d9",
+  "#2563eb",
+  "#059669",
+  "#d97706",
+  "#dc2626",
+  "#7c3aed",
+  "#0891b2",
+  "#be185d",
+  "#4d7c0f",
+  "#b45309",
+  "#6d28d9",
 ];
 
 const esc = (s: string) =>
-  s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
 
 function groupBySpeaker(segments: Segment[]): Segment[][] {
   const groups: Segment[][] = [];
@@ -26,7 +38,10 @@ function groupBySpeaker(segments: Segment[]): Segment[][] {
   return groups;
 }
 
-export function formatHtml(result: TranscriptResult, opts: { title?: string } = {}): string {
+export function formatHtml(
+  result: TranscriptResult,
+  opts: { title?: string } = {},
+): string {
   const title = opts.title || "Transcript";
   const colorOf = new Map<string, string>();
   result.speakers.forEach((sp, i) => {
@@ -51,7 +66,9 @@ export function formatHtml(result: TranscriptResult, opts: { title?: string } = 
         .map((s) => {
           const toneStr = s.tone?.length ? s.tone.join(", ") : "";
           const badge =
-            toneStr && toneStr !== lastTone ? `<em class="tone">${esc(toneStr)}</em> ` : "";
+            toneStr && toneStr !== lastTone
+              ? `<em class="tone">${esc(toneStr)}</em> `
+              : "";
           lastTone = toneStr;
           return `${badge}${esc(s.text)}`;
         })

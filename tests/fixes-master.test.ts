@@ -21,7 +21,7 @@ describe("configSignature (cache invalidation on option change)", () => {
     expect(configSignature({ ...base, timestampedProvider: "whisper-groq" })).not.toBe(
       ref,
     );
-    expect(configSignature({ ...base, diarizationLevel: 3 })).not.toBe(ref);
+    expect(configSignature({ ...base, diarizationLevel: 2 })).not.toBe(ref);
   });
 
   it("is stable for options that don't affect intermediates", () => {

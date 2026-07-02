@@ -83,8 +83,10 @@ export function transcriptionPrompt(ctx: ChunkContext): string {
   }
   if (ctx.roster) {
     parts.push("");
-    parts.push("SPEAKER ROSTER (prefer these labels/names when you can identify the voice):");
+    parts.push("SPEAKER ROSTER (context about who is present — but its name-to-voice binding may be wrong):");
     parts.push(ctx.roster);
+    parts.push("");
+    parts.push("Use a roster name ONLY when the voice itself tells you it's that person (they self-identify, are addressed by name, or the voice description clearly matches). If two speakers sound similar and you are not sure which name belongs to which voice, use 'Speaker A' / 'Speaker B' instead — a WRONG name is much worse than a generic label; a later pass verifies names.");
   }
   if (ctx.previousTail) {
     parts.push("");

@@ -27,12 +27,16 @@ function mkSeg(text: string, from: number, speaker = "Speaker A"): AlignedSegmen
 }
 
 describe("trimSeamOverlaps", () => {
-  const shared = "so I think there is an opportunity for everyone to make that transition";
+  const shared =
+    "so I think there is an opportunity for everyone to make that transition";
 
   it("trims the earlier copy's tail when the later segment re-covers it", () => {
     // Chunk N's copy ends with the shared span (truncated); chunk N+1 re-covers it in full.
     const a = mkSeg(`before the seam some early content and then ${shared}`, 0);
-    const b = mkSeg(`${shared} and then genuinely new content follows after the seam`, 30);
+    const b = mkSeg(
+      `${shared} and then genuinely new content follows after the seam`,
+      30,
+    );
     const out = trimSeamOverlaps([a, b]);
     expect(out).toHaveLength(2);
     expect(out[0]!.text).toBe("before the seam some early content and then");
@@ -49,7 +53,9 @@ describe("trimSeamOverlaps", () => {
 
   it("tolerates small transcription differences inside the duplicate", () => {
     const a = mkSeg(`lead-in words here ${shared}`, 0);
-    const nearDup = shared.replace("everyone", "everybody").replace("transition", "transitions");
+    const nearDup = shared
+      .replace("everyone", "everybody")
+      .replace("transition", "transitions");
     const b = mkSeg(`${nearDup} continuing with brand new material now`, 30);
     const out = trimSeamOverlaps([a, b]);
     expect(out[0]!.text).toBe("lead-in words here");

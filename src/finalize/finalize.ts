@@ -25,7 +25,10 @@ function textSimilarity(a: string, b: string): number {
   return inter / (ta.size + tb.size - inter);
 }
 
-function timeOverlapFrac(a: { start: number; end: number }, b: { start: number; end: number }): number {
+function timeOverlapFrac(
+  a: { start: number; end: number },
+  b: { start: number; end: number },
+): number {
   const ov = Math.max(0, Math.min(a.end, b.end) - Math.max(a.start, b.start));
   const shorter = Math.min(a.end - a.start, b.end - b.start);
   return shorter > 0 ? ov / shorter : 0;
@@ -50,7 +53,9 @@ export function suffixPrefixOverlap(
   // dp[i][j]: best score aligning some suffix of a[0..i) to exactly b[0..j).
   // origin[i][j]: where that suffix starts in `a`.
   const dp: number[][] = Array.from({ length: n + 1 }, () => new Array(m + 1).fill(0));
-  const origin: number[][] = Array.from({ length: n + 1 }, () => new Array(m + 1).fill(0));
+  const origin: number[][] = Array.from({ length: n + 1 }, () =>
+    new Array(m + 1).fill(0),
+  );
   for (let i = 0; i <= n; i++) {
     dp[i]![0] = 0; // leading gap in `a` is free
     origin[i]![0] = i;

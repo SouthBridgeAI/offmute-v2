@@ -47,7 +47,8 @@ export class ElevenLabsClient {
     opts: ElevenLabsOptions = {},
   ): Promise<TimestampedResult> {
     const model = opts.model ?? "scribe_v2";
-    const blob = audio instanceof Blob ? audio : new Blob([audio], { type: "audio/mpeg" });
+    const blob =
+      audio instanceof Blob ? audio : new Blob([audio], { type: "audio/mpeg" });
     const form = new FormData();
     form.append("file", blob, "audio.mp3");
     form.append("model_id", model);
@@ -98,7 +99,10 @@ export class ElevenLabsClient {
     };
     for (const w of words) {
       const prev = cur[cur.length - 1];
-      if (prev && (w.speaker !== prev.speaker || w.start - prev.end > MAX_UTTERANCE_GAP_SEC)) {
+      if (
+        prev &&
+        (w.speaker !== prev.speaker || w.start - prev.end > MAX_UTTERANCE_GAP_SEC)
+      ) {
         flush();
       }
       cur.push(w);

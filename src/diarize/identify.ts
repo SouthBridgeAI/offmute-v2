@@ -26,9 +26,36 @@ export interface IdentifyResult {
   reasoning: string;
 }
 
-function buildTranscriptExcerpt(segments: IdentifySegment[], speakers: SpeakerInfo[]): string {
-  // Give the reasoner a representative sample per speaker: their longest segments
-  // (most likely to contain identification cues), plus overall flow.
+/** Above this size, fall back to per-speaker excerpts instead of the full transcript. */
+const MAX_FULL_TRANSCRIPT_CHARS = 80_000;
+
+function buildTranscriptExcerpt(
+  segments: IdentifySegment[],
+  speakers: SpeakerInfo[],
+): string {
+  const speakerHeader = (sp: SpeakerInfo) => {
+    const voices =
+      sp.asrVoices && sp.asrVoices.length ? `, voices=${sp.asrVoices.join("/")}` : "";
+    return `${sp.id} (${sp.segmentCount || 0} turns, ~${Math.round(sp.talkTime || 0)}s talk time${voices})`;
+  };
+
+  // The FULL transcript in order when it fits — vocatives ("thanks, Jay") and flips
+  // only make sense with the conversational flow, and a meeting's worth of text is
+  // cheap for a text reasoner. Excerpt mode is the fallback for very long recordings.
+  const totalChars = segments.reduce((n, s) => n + s.text.length, 0);
+  if (totalChars <= MAX_FULL_TRANSCRIPT_CHARS) {
+    const parts = [
+      "SPEAKERS:",
+      ...speakers.map((sp) => `- ${speakerHeader(sp)}`),
+      "",
+      "FULL TRANSCRIPT (in order):",
+    ];
+    for (const s of segments) parts.push(`[${s.speaker}] ${s.text}`);
+    return parts.join("\n");
+  }
+
+  // Fallback: a representative sample per speaker — their longest segments (most
+  // likely to contain identification cues).
   const bySpeaker: Record<string, IdentifySegment[]> = {};
   for (const s of segments) (bySpeaker[s.speaker] ??= []).push(s);
   const parts: string[] = [];
@@ -36,30 +63,42 @@ function buildTranscriptExcerpt(segments: IdentifySegment[], speakers: SpeakerIn
     const segs = (bySpeaker[sp.id] || [])
       .sort((a, b) => b.text.length - a.text.length)
       .slice(0, 6);
-    const voices = sp.asrVoices && sp.asrVoices.length ? `, voices=${sp.asrVoices.join("/")}` : "";
-    parts.push(
-      `### ${sp.id} (${sp.name || "unknown"}, ${sp.segmentCount || 0} turns, ~${Math.round(sp.talkTime || 0)}s${voices})`,
-    );
+    parts.push(`### ${speakerHeader(sp)}`);
     for (const s of segs) parts.push(`  ${s.text}`);
   }
   return parts.join("\n");
 }
 
-export function identifyPrompt(transcriptExcerpt: string, roster: string, knownSpeakers?: string[]): string {
-  return `You are identifying speakers in a transcribed recording. Below are the most substantial quotes from each speaker (labeled exactly as shown in the headers, e.g. "Speaker A"), plus a roster description.
+export function identifyPrompt(
+  transcriptExcerpt: string,
+  roster: string,
+  knownSpeakers?: string[],
+  nameHints?: Record<string, string>,
+): string {
+  const hintBlock =
+    nameHints && Object.keys(nameHints).length
+      ? `\nTENTATIVE LABELS (from the transcription model — UNVERIFIED and possibly SWAPPED between speakers; treat as weak hints to confirm or refute, never as ground truth):\n${Object.entries(
+          nameHints,
+        )
+          .map(([id, n]) => `  ${id} was tentatively called "${n}"`)
+          .join("\n")}\n`
+      : "";
+  return `You are identifying speakers in a transcribed recording. Below is the diarized transcript (speaker ids like "Speaker A" are stable voice clusters), plus a roster description.
 
 Identify each speaker by name and/or role using content cues: self-introductions ("my name is X"), references to themselves, their role, or context. If you cannot confidently identify a speaker, leave the name empty ("").
 
 CRITICAL — direction of address: when a speaker says a name, work out whether they are talking ABOUT themselves or TO someone else. "Thanks, Rishi" or "I'm stealing your update, Rishi" is spoken TO Rishi — so that speaker is NOT Rishi, and Rishi is one of the OTHER speakers. Only first-person statements ("I'm Rishi", "my name is...") identify the speaker themselves. Misreading address direction is the most common error in this task.
 
+BEWARE the roster and tentative labels: they describe who is PRESENT, but their name-to-voice binding may be wrong or swapped (this happens when speakers sound similar). Verify every name against first-person evidence in the transcript itself. If the transcript contradicts a tentative label, trust the transcript. If you cannot verify which of two speakers a name belongs to, leave both names empty rather than guess.
+
 ${knownSpeakers && knownSpeakers.length ? `Known possible speakers: ${knownSpeakers.join(", ")}\n` : ""}ROSTER:
 ${roster}
-
-TRANSCRIPT EXCERPTS BY SPEAKER:
+${hintBlock}
+TRANSCRIPT:
 ${transcriptExcerpt}
 
-Respond as JSON: { "speakers": [ { "id": "<exact speaker id from the headers>", "name": "Full Name or Role", "confidence": "high|medium|low", "evidence": "a short quote copied VERBATIM from the excerpts above that supports the name" } ], "reasoning": "one-paragraph summary" }
-Use the EXACT speaker id strings from the headers above (e.g. "Speaker A"). The evidence field must be an exact quote from the transcript excerpts — do not paraphrase it.`;
+Respond as JSON: { "speakers": [ { "id": "<exact speaker id from the headers>", "name": "Full Name or Role", "confidence": "high|medium|low", "evidence": "a short quote copied VERBATIM from the transcript above that supports the name" } ], "reasoning": "one-paragraph summary" }
+Use the EXACT speaker id strings (e.g. "Speaker A"). The evidence field must be an exact quote from the transcript — do not paraphrase it.`;
 }
 
 /** Identify speakers via a text reasoner. Returns a name map (speaker id → name). */
@@ -70,11 +109,15 @@ export async function identifySpeakers(
   speakers: SpeakerInfo[],
   roster: string,
   knownSpeakers?: string[],
+  nameHints?: Record<string, string>,
 ): Promise<IdentifyResult> {
   const excerpt = buildTranscriptExcerpt(segments, speakers);
-  const { data, error } = await client.chatJson<{ speakers: IdentifiedSpeaker[]; reasoning: string }>(
+  const { data, error } = await client.chatJson<{
+    speakers: IdentifiedSpeaker[];
+    reasoning: string;
+  }>(
     model,
-    [{ role: "user", content: identifyPrompt(excerpt, roster, knownSpeakers) }],
+    [{ role: "user", content: identifyPrompt(excerpt, roster, knownSpeakers, nameHints) }],
     // 4000 tokens: verbose models quote long verbatim evidence — a 2000 cap truncated
     // mid-JSON and silently emptied a whole identify pass (observed live).
     { temperature: 0.1, maxTokens: 4000, logKind: "identify" },

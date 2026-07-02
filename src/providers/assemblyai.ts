@@ -109,7 +109,16 @@ export class AssemblyAIProvider {
       id?: string | null;
       audio_duration?: number | null;
       speech_model_used?: string | null;
-      utterances?: { speaker: string; text: string; start?: number | null; end?: number | null; confidence?: number | null; words?: AaiWord[] | null }[] | null;
+      utterances?:
+        | {
+            speaker: string;
+            text: string;
+            start?: number | null;
+            end?: number | null;
+            confidence?: number | null;
+            words?: AaiWord[] | null;
+          }[]
+        | null;
       words?: AaiWord[] | null;
     },
     id: string,
@@ -137,7 +146,7 @@ export class AssemblyAIProvider {
     }
     const words: TimestampedWord[] = (t.words || []).map(toWord);
     const durationSec = words.length
-      ? (words[words.length - 1]!.end || 0)
+      ? words[words.length - 1]!.end || 0
       : utterances.length
         ? utterances[utterances.length - 1]!.end
         : 0;

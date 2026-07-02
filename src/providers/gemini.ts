@@ -93,7 +93,10 @@ export function resolveThinking(model: string): Record<string, unknown> | undefi
 /** Whether an error message looks like the model rejected our thinking config. */
 export function isThinkingConfigError(message: string | undefined): boolean {
   if (!message) return false;
-  return /thinking/i.test(message) && /(not supported|invalid|unsupported|unknown name|unexpected)/i.test(message);
+  return (
+    /thinking/i.test(message) &&
+    /(not supported|invalid|unsupported|unknown name|unexpected)/i.test(message)
+  );
 }
 
 export class GeminiClient {
@@ -206,10 +209,14 @@ export class GeminiClient {
           // and retry (the next attempt then runs without any thinkingConfig).
           if (config.thinkingConfig && isThinkingConfigError(lastError)) {
             delete config.thinkingConfig;
-            logger.warn(`[gemini] model ${model} rejected thinking config — retrying without it`);
+            logger.warn(
+              `[gemini] model ${model} rejected thinking config — retrying without it`,
+            );
             continue;
           }
-          logger.warn(`[gemini] attempt ${attempt + 1}/${maxRetries} failed: ${lastError}`);
+          logger.warn(
+            `[gemini] attempt ${attempt + 1}/${maxRetries} failed: ${lastError}`,
+          );
           logLlmCall({
             ts: new Date(t0).toISOString(),
             provider: "gemini",
@@ -225,7 +232,11 @@ export class GeminiClient {
           if (attempt < maxRetries - 1) await sleep(retryDelayMs * (attempt + 1));
         }
       }
-      return { text: "", usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 }, error: lastError };
+      return {
+        text: "",
+        usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+        error: lastError,
+      };
     } finally {
       await this.cleanup(uploaded);
     }

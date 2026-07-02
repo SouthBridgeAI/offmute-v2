@@ -104,7 +104,8 @@ export function assignGlobalSpeakers(
       bestOverlap = o.seg.end - o.seg.start;
     }
     o.asrSpeaker = bestSpeaker;
-    asrDuration[o.asrSpeaker] = (asrDuration[o.asrSpeaker] ?? 0) + Math.max(bestOverlap, 0.1);
+    asrDuration[o.asrSpeaker] =
+      (asrDuration[o.asrSpeaker] ?? 0) + Math.max(bestOverlap, 0.1);
     labelVotes[o.asrSpeaker] ??= {};
     labelVotes[o.asrSpeaker]![o.seg.speaker] =
       (labelVotes[o.asrSpeaker]![o.seg.speaker] ?? 0) + 1;
@@ -154,7 +155,9 @@ export function assignGlobalSpeakers(
   }
 
   // Assign global ids "Speaker A", "Speaker B", … by talk time (desc).
-  const groupsByTalk = Object.keys(groupTalk).sort((a, b) => groupTalk[b]! - groupTalk[a]!);
+  const groupsByTalk = Object.keys(groupTalk).sort(
+    (a, b) => groupTalk[b]! - groupTalk[a]!,
+  );
   const groupToGlobal: Record<string, string> = {};
   groupsByTalk.forEach((g, i) => {
     groupToGlobal[g] = `Speaker ${String.fromCharCode(65 + i)}`;
@@ -168,7 +171,8 @@ export function assignGlobalSpeakers(
   const labelGroupCount: Record<string, number> = {};
   for (const g of groupsByTalk) {
     const label = groupLabel[g]!;
-    if (!isGenericLabel(label)) labelGroupCount[label] = (labelGroupCount[label] ?? 0) + 1;
+    if (!isGenericLabel(label))
+      labelGroupCount[label] = (labelGroupCount[label] ?? 0) + 1;
   }
   const displayNames: Record<string, string> = {};
   for (const g of groupsByTalk) {

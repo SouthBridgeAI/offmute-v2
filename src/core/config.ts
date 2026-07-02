@@ -195,7 +195,7 @@ export function resolveOptions(
     passes: (() => {
       const p = opts.passes ?? DEFAULT_PASSES;
       // --level 3 implies the identify pass; --level <=2 strips it.
-      if ((opts.diarizationLevel ?? 2) >= 3 && !p.includes("identify")) {
+      if ((opts.diarizationLevel ?? 3) >= 3 && !p.includes("identify")) {
         // insert identify before finalize
         const out = [...p];
         const fi = out.indexOf("finalize");
@@ -213,7 +213,10 @@ export function resolveOptions(
     formats: opts.formats ?? ["md"],
     mdStyle: opts.mdStyle ?? "merged",
     summary: opts.summary ?? false,
-    diarizationLevel: opts.diarizationLevel ?? 2,
+    // Level 3 is the default: display names must come from the VERIFIED identify pass.
+    // (A describe-pass roster once bound names to the wrong voices and level 2 shipped
+    // them unchecked — the Jay-call flip. Level 2 now shows honest Speaker A/B labels.)
+    diarizationLevel: opts.diarizationLevel ?? 3,
     identifyMode: opts.identifyMode ?? "dual",
     apiKeys: opts.apiKeys,
     model: opts.model,
@@ -285,7 +288,7 @@ export function configSignature(o: PipelineOptions): string {
     chunkDurationSec: o.chunkDurationSec ?? 600,
     chunkOverlapSec: o.chunkOverlapSec ?? 60,
     screenshotCount: o.screenshotCount ?? 6,
-    diarizationLevel: o.diarizationLevel ?? 2,
+    diarizationLevel: o.diarizationLevel ?? 3,
     timestampedProvider: o.timestampedProvider ?? "assemblyai",
   };
   return createHash("sha1").update(JSON.stringify(relevant)).digest("hex");

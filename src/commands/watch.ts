@@ -12,21 +12,44 @@
  *  - Graceful stop: first Ctrl-C aborts the running job at a stage boundary (partials
  *    and cache stay on disk), second Ctrl-C force-exits.
  */
-import { existsSync, mkdirSync, readFileSync, writeFileSync, appendFileSync, watch as fsWatch, statSync, readdirSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  writeFileSync,
+  appendFileSync,
+  watch as fsWatch,
+  statSync,
+  readdirSync,
+} from "node:fs";
 import { join, extname, basename } from "node:path";
 import { transcribe } from "../core/pipeline.js";
 import { inputSignature, type PipelineOptions } from "../core/config.js";
 import { notify } from "../utils/notify.js";
 
 const MEDIA_EXTS = new Set([
-  ".mp4", ".mov", ".mkv", ".webm", ".avi",
-  ".m4a", ".mp3", ".wav", ".aac", ".flac", ".ogg", ".opus", ".wma",
+  ".mp4",
+  ".mov",
+  ".mkv",
+  ".webm",
+  ".avi",
+  ".m4a",
+  ".mp3",
+  ".wav",
+  ".aac",
+  ".flac",
+  ".ogg",
+  ".opus",
+  ".wma",
 ]);
 const POLL_MS = 5000;
 
 interface WatchState {
   /** inputSignature → record */
-  done: Record<string, { file: string; finishedAt: string; segments?: number; error?: string }>;
+  done: Record<
+    string,
+    { file: string; finishedAt: string; segments?: number; error?: string }
+  >;
 }
 
 export interface WatchCliOptions {
@@ -72,7 +95,9 @@ export async function runWatch(dir: string, opts: WatchCliOptions): Promise<void
   };
 
   const matchExts = opts.match
-    ? new Set(opts.match.split(",").map((e) => (e.startsWith(".") ? e : `.${e}`).toLowerCase()))
+    ? new Set(
+        opts.match.split(",").map((e) => (e.startsWith(".") ? e : `.${e}`).toLowerCase()),
+      )
     : MEDIA_EXTS;
 
   // --- discovery ---------------------------------------------------------
@@ -106,14 +131,20 @@ export async function runWatch(dir: string, opts: WatchCliOptions): Promise<void
       if (state.done[sig]) continue; // already processed this exact file
       if (isFirst && !opts.backlog) {
         // --no-backlog: pre-existing files are recorded as skipped, not processed.
-        state.done[sig] = { file: basename(file), finishedAt: new Date().toISOString(), error: "skipped (pre-existing, --no-backlog)" };
+        state.done[sig] = {
+          file: basename(file),
+          finishedAt: new Date().toISOString(),
+          error: "skipped (pre-existing, --no-backlog)",
+        };
         continue;
       }
       const prev = seenSizes.get(file);
       if (prev && prev.size === st.size && prev.mtimeMs === st.mtimeMs) {
         queued.add(file);
         queue.push(file);
-        log(`queued   ${basename(file)}  (${(st.size / 1e6).toFixed(0)}MB, queue: ${queue.length})`);
+        log(
+          `queued   ${basename(file)}  (${(st.size / 1e6).toFixed(0)}MB, queue: ${queue.length})`,
+        );
       } else {
         seenSizes.set(file, { size: st.size, mtimeMs: st.mtimeMs });
       }
@@ -153,7 +184,9 @@ export async function runWatch(dir: string, opts: WatchCliOptions): Promise<void
         showProgress: false,
       });
       const mins = ((Date.now() - t0) / 60000).toFixed(1);
-      const cost = result.metadata.cost ? ` · ~$${result.metadata.cost.actualUsd.toFixed(2)}` : "";
+      const cost = result.metadata.cost
+        ? ` · ~$${result.metadata.cost.actualUsd.toFixed(2)}`
+        : "";
       state.done[inputSignature(file)] = {
         file: name,
         finishedAt: new Date().toISOString(),
@@ -161,8 +194,13 @@ export async function runWatch(dir: string, opts: WatchCliOptions): Promise<void
       };
       saveState();
       processed++;
-      log(`done     ${name} · ${result.segments.length} segments · ${result.speakers.length} speakers${cost} · ${mins}m`);
-      notify("offmute-v2 watch", `${name} transcribed — ${result.segments.length} segments${cost}`);
+      log(
+        `done     ${name} · ${result.segments.length} segments · ${result.speakers.length} speakers${cost} · ${mins}m`,
+      );
+      notify(
+        "offmute-v2 watch",
+        `${name} transcribed — ${result.segments.length} segments${cost}`,
+      );
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       if (abort.signal.aborted) {
@@ -192,7 +230,9 @@ export async function runWatch(dir: string, opts: WatchCliOptions): Promise<void
       process.exit(1);
     }
     stopping = true;
-    log(`stopping — ${controller.current ? "finishing current stage, " : ""}state saved. (Ctrl-C again to force)`);
+    log(
+      `stopping — ${controller.current ? "finishing current stage, " : ""}state saved. (Ctrl-C again to force)`,
+    );
     controller.current?.abort();
     // Exit once the active job unwinds.
     const wait = setInterval(() => {
@@ -204,7 +244,9 @@ export async function runWatch(dir: string, opts: WatchCliOptions): Promise<void
     }, 200);
   });
 
-  log(`watching ${dir}  (exts: ${[...matchExts].join(" ")}, jobs: ${jobs}${opts.backlog ? "" : ", backlog skipped"})`);
+  log(
+    `watching ${dir}  (exts: ${[...matchExts].join(" ")}, jobs: ${jobs}${opts.backlog ? "" : ", backlog skipped"})`,
+  );
   scan(true);
   void pump();
 

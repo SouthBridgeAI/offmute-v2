@@ -33,7 +33,9 @@ const program = new Command();
 
 program
   .name("offmute-v2")
-  .description("Diarized meeting transcription with multimodal LLMs + timestamped alignment.")
+  .description(
+    "Diarized meeting transcription with multimodal LLMs + timestamped alignment.",
+  )
   .version(packageVersion);
 
 interface TranscribeCliOpts {
@@ -86,7 +88,10 @@ async function runTranscribe(input: string, opts: TranscribeCliOpts): Promise<vo
     mdStyle: opts.mdStyle,
     summary: opts.summary,
     knownSpeakers: opts.speakers
-      ? opts.speakers.split(",").map((s) => s.trim()).filter(Boolean)
+      ? opts.speakers
+          .split(",")
+          .map((s) => s.trim())
+          .filter(Boolean)
       : undefined,
     diarizationLevel: level,
     identifyMode: opts.identify,
@@ -103,8 +108,13 @@ async function runTranscribe(input: string, opts: TranscribeCliOpts): Promise<vo
   console.log(`Done. ${result.segments.length} segments.`);
   // A run long enough to walk away from earns a ping when it's back.
   if (opts.notify && Date.now() - t0 > 120_000) {
-    const cost = result.metadata.cost ? ` · ~$${result.metadata.cost.actualUsd.toFixed(2)}` : "";
-    notify("offmute-v2", `${basename(input)} transcribed — ${result.segments.length} segments${cost}`);
+    const cost = result.metadata.cost
+      ? ` · ~$${result.metadata.cost.actualUsd.toFixed(2)}`
+      : "";
+    notify(
+      "offmute-v2",
+      `${basename(input)} transcribed — ${result.segments.length} segments${cost}`,
+    );
   }
 }
 
@@ -122,11 +132,30 @@ function addTranscribeOptions(cmd: Command): Command {
     .option("--concurrency <n>", "max concurrent chunk requests", "4")
     .option("--screenshots <n>", "number of keyframes to extract (video)", "6")
     .option("--formats <list>", "output formats: srt,md,txt,html,json (default: md)")
-    .option("--md-style <style>", "markdown layout: merged (paragraphs) | turns", "merged")
-    .option("--summary", "also write <name>.summary.md (TL;DR, decisions, action items)", false)
-    .option("--speakers <names>", "known speaker names, comma-separated (implies --level 3)")
-    .option("--level <1|2|3>", "diarization level (1=separation, 2=consistent, 3=identify)", "2")
-    .option("--identify <mode>", "speaker naming: dual (two reasoners, default) | single", "dual")
+    .option(
+      "--md-style <style>",
+      "markdown layout: merged (paragraphs) | turns",
+      "merged",
+    )
+    .option(
+      "--summary",
+      "also write <name>.summary.md (TL;DR, decisions, action items)",
+      false,
+    )
+    .option(
+      "--speakers <names>",
+      "known speaker names, comma-separated (implies --level 3)",
+    )
+    .option(
+      "--level <1|2|3>",
+      "diarization level (1=separation, 2=anonymous consistent, 3=verified names)",
+      "3",
+    )
+    .option(
+      "--identify <mode>",
+      "speaker naming: dual (two reasoners, default) | single",
+      "dual",
+    )
     .option("--model <name>", "override transcription model")
     .option("--reasoner <name>", "override text-reasoner model (default deepseek-chat)")
     .option(
@@ -137,7 +166,10 @@ function addTranscribeOptions(cmd: Command): Command {
     .option("--only-chunk <n>", "process only a specific chunk index (debug)")
     .option("--save-intermediates", "save intermediates (default true)", true)
     .option("--no-progress", "hide progress output")
-    .option("--no-llm-log", "disable per-call LLM logging to <intermediates>/llm-calls.jsonl")
+    .option(
+      "--no-llm-log",
+      "disable per-call LLM logging to <intermediates>/llm-calls.jsonl",
+    )
     .option("--no-notify", "skip the OS notification after long runs")
     .option("--log-level <level>", "debug | info | warn | error", "info");
 }
@@ -187,7 +219,10 @@ program
   .option("--md-style <style>", "markdown layout: merged | turns", "merged")
   .option("--summary", "also write a summary per file", false)
   .option("--instructions <text>", "custom instructions for the LLM")
-  .option("--speakers <names>", "known speaker names, comma-separated (implies --level 3)")
+  .option(
+    "--speakers <names>",
+    "known speaker names, comma-separated (implies --level 3)",
+  )
   .option("--level <1|2|3>", "diarization level", "3")
   .option("--identify <mode>", "speaker naming: dual | single", "dual")
   .option("--model <name>", "override transcription model")
@@ -228,7 +263,10 @@ program
           summary: opts.summary,
           instructions: opts.instructions,
           knownSpeakers: opts.speakers
-            ? opts.speakers.split(",").map((s) => s.trim()).filter(Boolean)
+            ? opts.speakers
+                .split(",")
+                .map((s) => s.trim())
+                .filter(Boolean)
             : undefined,
           diarizationLevel: level,
           identifyMode: opts.identify,
@@ -242,11 +280,19 @@ program
 
 program
   .command("rename <result-json> <mappings...>")
-  .description('retcon speaker names without reprocessing, e.g. rename out.json "Speaker B=Ang Li"')
+  .description(
+    'retcon speaker names without reprocessing, e.g. rename out.json "Speaker B=Ang Li"',
+  )
   .option("--formats <list>", "formats to regenerate next to the json", "md,srt,txt")
   .option("--md-style <style>", "markdown layout: merged | turns", "merged")
-  .action((jsonPath: string, mappings: string[], opts: { formats: string; mdStyle?: "merged" | "turns" }) => {
-    runRename(jsonPath, mappings, opts);
-  });
+  .action(
+    (
+      jsonPath: string,
+      mappings: string[],
+      opts: { formats: string; mdStyle?: "merged" | "turns" },
+    ) => {
+      runRename(jsonPath, mappings, opts);
+    },
+  );
 
 program.parse();

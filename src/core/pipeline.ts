@@ -227,18 +227,22 @@ export async function transcribe(opts: PipelineOptions): Promise<TranscriptResul
     }
     if (!existsSync(audioPath) || forceAll) {
       logger.info("extracting audio (mono 16kHz mp3)...");
-      await extractAudio(options.input, audioPath, AUDIO_OPTS).catch(stageTag("preprocess"));
+      await extractAudio(options.input, audioPath, AUDIO_OPTS).catch(
+        stageTag("preprocess"),
+      );
     }
     if (probeInfo.hasVideo) {
       const kfDir = `${options.intermediatesDir}/keyframes`;
       if (!existsSync(kfDir) || forceAll) {
         logger.info("extracting keyframes...");
         // Keyframes are enrichment, not a requirement — degrade gracefully.
-        await extractKeyframes(options.input, kfDir, options.screenshotCount).catch((err) => {
-          logger.warn(
-            `keyframe extraction failed (continuing audio-only): ${err instanceof Error ? err.message : err}`,
-          );
-        });
+        await extractKeyframes(options.input, kfDir, options.screenshotCount).catch(
+          (err) => {
+            logger.warn(
+              `keyframe extraction failed (continuing audio-only): ${err instanceof Error ? err.message : err}`,
+            );
+          },
+        );
       }
     }
   } else {
@@ -382,8 +386,12 @@ export async function transcribe(opts: PipelineOptions): Promise<TranscriptResul
           .sort((a, b) => a.startSec - b.startSec);
         if (segs.length === 0) return;
         const lines = segs.map((s) => {
-          const mm = Math.floor(s.startSec / 60).toString().padStart(2, "0");
-          const ss = Math.floor(s.startSec % 60).toString().padStart(2, "0");
+          const mm = Math.floor(s.startSec / 60)
+            .toString()
+            .padStart(2, "0");
+          const ss = Math.floor(s.startSec % 60)
+            .toString()
+            .padStart(2, "0");
           return `[${mm}:${ss}] **${s.speaker}**: ${s.text}`;
         });
         writeFileSync(
@@ -613,6 +621,21 @@ export async function transcribe(opts: PipelineOptions): Promise<TranscriptResul
     }
   }
 
+  // Consistency's label-derived display names are HINTS, not conclusions — the
+  // describe-pass roster can bind names to the wrong voices (both speakers with the
+  // same accent → the LLM labels by content prior, and once shipped that's a silent
+  // flip; observed live on a 2-person call). Demote them: display names reset to the
+  // stable global ids, and the hints go to the identify pass for verification.
+  // Names in the output come only from identify (or --speakers).
+  const nameHints: Record<string, string> = {};
+  for (const sp of speakers) {
+    if (sp.name && sp.name !== sp.id) nameHints[sp.id] = sp.name;
+  }
+  segments = segments.map((s) =>
+    s.speakerName !== s.speaker ? { ...s, speakerName: s.speaker } : s,
+  );
+  speakers = speakers.map((sp) => (sp.name !== sp.id ? { ...sp, name: sp.id } : sp));
+
   // ---------- 6.5 IDENTIFY (level 3) ----------
   // Decoupled from DeepSeek and from the describe pass: any reasoner-capable key works
   // (falls back to Gemini, whose key transcription already required), and a missing
@@ -632,16 +655,27 @@ export async function transcribe(opts: PipelineOptions): Promise<TranscriptResul
       );
       checkAbort();
       const id = await identifySpeakersV2(
-        { client: reasonerA.client, model: reasonerA.info.model, provider: reasonerA.info.provider },
+        {
+          client: reasonerA.client,
+          model: reasonerA.info.model,
+          provider: reasonerA.info.provider,
+        },
         reasonerB
-          ? { client: reasonerB.client, model: reasonerB.info.model, provider: reasonerB.info.provider }
+          ? {
+              client: reasonerB.client,
+              model: reasonerB.info.model,
+              provider: reasonerB.info.provider,
+            }
           : null,
         segments.map((s) => ({ speaker: s.speaker, text: s.text })),
         speakers,
         {
-          roster: description?.roster ?? "(no roster available — infer from the transcript alone)",
+          roster:
+            description?.roster ??
+            "(no roster available — infer from the transcript alone)",
           knownSpeakers: options.knownSpeakers,
           mode,
+          nameHints,
         },
       ).catch(stageTag("identify"));
       logger.info(

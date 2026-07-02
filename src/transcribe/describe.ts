@@ -33,8 +33,10 @@ A short paragraph: what kind of recording this is, the setting, the main topics,
 ROSTER
 A bulleted speaker roster. For each distinct speaker you can identify, give:
 - A short label to use consistently (a name/role if you can infer it, e.g. "Presenter (Hrishi)", else "Speaker A").
-- A one-line description (voice, role, accent if notable).
+- A one-line description anchored to the VOICE itself (pitch, pace, accent, audio quality/mic distance) plus role if evident.
 List the people you can distinguish. Do not invent names you didn't hear. If only one person speaks, say so.
+
+IMPORTANT — name-to-voice binding: knowing WHO is present is not the same as knowing WHICH voice is whose. If the voices are similar (same accent, same register) or you are not certain which voice a name belongs to, say so explicitly in the roster (e.g. "one of the two voices — binding uncertain") instead of asserting it. Never describe a speaker by conversational role alone (e.g. "the primary speaker who drives the conversation") — that changes call to call and misleads downstream labeling; anchor to the voice.
 
 File: ${fileName}`;
 }

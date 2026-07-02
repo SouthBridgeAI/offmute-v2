@@ -21,7 +21,8 @@ describe("resolveOptions", () => {
     expect(o.chunkDurationSec).toBe(600);
     expect(o.chunkOverlapSec).toBe(60);
     expect(o.concurrency).toBe(4);
-    expect(o.diarizationLevel).toBe(2);
+    // Level 3 is the default: names shown must be names verified (identify pass).
+    expect(o.diarizationLevel).toBe(3);
     expect(o.formats).toEqual(["md"]);
   });
 });

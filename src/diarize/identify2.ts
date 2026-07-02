@@ -14,7 +14,11 @@
  * co-founder and CEO…" attributed to an already-named *different* speaker — invisible
  * to WER, obvious to a text check.
  */
-import { identifySpeakers, type IdentifyResult, type IdentifySegment } from "./identify.js";
+import {
+  identifySpeakers,
+  type IdentifyResult,
+  type IdentifySegment,
+} from "./identify.js";
 import type { SpeakerInfo } from "../core/types.js";
 import type { OpenAICompatClient } from "../providers/openai-compat.js";
 import { logger } from "../utils/logger.js";
@@ -29,7 +33,13 @@ export interface IdentifyV2Decision {
   speakerId: string;
   nameA?: string;
   nameB?: string;
-  outcome: "agreed" | "a-only" | "b-only" | "evidence-break" | "tripwire" | "kept-generic";
+  outcome:
+    | "agreed"
+    | "a-only"
+    | "b-only"
+    | "evidence-break"
+    | "tripwire"
+    | "kept-generic";
   finalName?: string;
   note?: string;
 }
@@ -66,7 +76,10 @@ export function namesMatch(a: string, b: string): boolean {
 }
 
 /** Does an evidence quote actually appear in the transcript (normalized substring)? */
-export function evidenceInTranscript(evidence: string | undefined, transcript: string): boolean {
+export function evidenceInTranscript(
+  evidence: string | undefined,
+  transcript: string,
+): boolean {
   if (!evidence) return false;
   const ne = norm(evidence);
   if (ne.length < 8) return false; // too short to mean anything
@@ -78,10 +91,46 @@ const INTRO_RE =
 // Words that follow "I'm ..." constantly without being names (observed live: a
 // capitalized mid-sentence "I'm" matched as the *name* "I'm" — pronouns must die here).
 const INTRO_STOPWORDS = new Set([
-  "i", "im", "ive", "id", "ill", "you", "we", "they", "he", "she", "it",
-  "so", "not", "just", "here", "there", "going", "gonna", "really", "very", "also",
-  "still", "sure", "sorry", "happy", "glad", "excited", "curious", "the", "a", "an",
-  "okay", "ok", "now", "like", "actually", "basically", "kind", "sort", "definitely",
+  "i",
+  "im",
+  "ive",
+  "id",
+  "ill",
+  "you",
+  "we",
+  "they",
+  "he",
+  "she",
+  "it",
+  "so",
+  "not",
+  "just",
+  "here",
+  "there",
+  "going",
+  "gonna",
+  "really",
+  "very",
+  "also",
+  "still",
+  "sure",
+  "sorry",
+  "happy",
+  "glad",
+  "excited",
+  "curious",
+  "the",
+  "a",
+  "an",
+  "okay",
+  "ok",
+  "now",
+  "like",
+  "actually",
+  "basically",
+  "kind",
+  "sort",
+  "definitely",
 ]);
 
 /** Find self-introductions: segments where the speaker states their own name. */
@@ -95,7 +144,11 @@ export function findSelfIntroductions(
       const tokens = name.split(/\s+/).map((t) => t.toLowerCase().replace(/['’]/g, ""));
       if (tokens.some((t) => INTRO_STOPWORDS.has(t))) continue;
       if (name.replace(/[^\p{L}]/gu, "").length < 3) continue; // too short to be a name
-      out.push({ speakerId: seg.speaker, introducedName: name, segmentText: seg.text.slice(0, 160) });
+      out.push({
+        speakerId: seg.speaker,
+        introducedName: name,
+        segmentText: seg.text.slice(0, 160),
+      });
     }
   }
   return out;
@@ -104,7 +157,9 @@ export function findSelfIntroductions(
 function pickCompleteName(a?: string, b?: string): string {
   if (!a) return b ?? "";
   if (!b) return a;
-  return b.trim().split(/\s+/).length > a.trim().split(/\s+/).length ? b.trim() : a.trim();
+  return b.trim().split(/\s+/).length > a.trim().split(/\s+/).length
+    ? b.trim()
+    : a.trim();
 }
 
 interface Candidate {
@@ -121,7 +176,12 @@ export function adjudicate(
   transcriptNorm: string,
   intro: string | undefined,
 ): IdentifyV2Decision {
-  const base: IdentifyV2Decision = { speakerId, nameA: a.name, nameB: b?.name, outcome: "kept-generic" };
+  const base: IdentifyV2Decision = {
+    speakerId,
+    nameA: a.name,
+    nameB: b?.name,
+    outcome: "kept-generic",
+  };
   const aName = a.name?.trim() || undefined;
   const bName = b?.name?.trim() || undefined;
 
@@ -142,7 +202,12 @@ export function adjudicate(
     if (bName && namesMatch(bName, intro))
       return { ...base, outcome: "tripwire", finalName: bName, note: `intro "${intro}"` };
     // Neither pass matches a stated introduction — adopt the introduced name itself.
-    return { ...base, outcome: "tripwire", finalName: intro, note: `intro "${intro}" overrode both passes` };
+    return {
+      ...base,
+      outcome: "tripwire",
+      finalName: intro,
+      note: `intro "${intro}" overrode both passes`,
+    };
   }
 
   if (aName && !bName) return { ...base, outcome: "a-only", finalName: aName };
@@ -151,9 +216,25 @@ export function adjudicate(
   // Real disagreement: only evidence that exists in the transcript keeps a candidate alive.
   const aOk = evidenceInTranscript(a.evidence, transcriptNorm);
   const bOk = evidenceInTranscript(b.evidence, transcriptNorm);
-  if (aOk && !bOk) return { ...base, outcome: "evidence-break", finalName: aName, note: "B evidence not in transcript" };
-  if (bOk && !aOk) return { ...base, outcome: "evidence-break", finalName: bName, note: "A evidence not in transcript" };
-  return { ...base, outcome: "kept-generic", note: "disagreement unresolved — not inventing a name" };
+  if (aOk && !bOk)
+    return {
+      ...base,
+      outcome: "evidence-break",
+      finalName: aName,
+      note: "B evidence not in transcript",
+    };
+  if (bOk && !aOk)
+    return {
+      ...base,
+      outcome: "evidence-break",
+      finalName: bName,
+      note: "A evidence not in transcript",
+    };
+  return {
+    ...base,
+    outcome: "kept-generic",
+    note: "disagreement unresolved — not inventing a name",
+  };
 }
 
 export interface IdentifyV2Options {
@@ -161,6 +242,8 @@ export interface IdentifyV2Options {
   knownSpeakers?: string[];
   /** Skip the second pass ("single") — one reasoner, tripwire still active. */
   mode?: "dual" | "single";
+  /** Tentative names from the transcription labels (unverified, possibly swapped). */
+  nameHints?: Record<string, string>;
 }
 
 export async function identifySpeakersV2(
@@ -172,7 +255,15 @@ export async function identifySpeakersV2(
 ): Promise<IdentifyV2Result> {
   const mode = opts.mode ?? "dual";
   const runPass = (r: ReasonerHandle) =>
-    identifySpeakers(r.client, r.model, segments, speakers, opts.roster, opts.knownSpeakers);
+    identifySpeakers(
+      r.client,
+      r.model,
+      segments,
+      speakers,
+      opts.roster,
+      opts.knownSpeakers,
+      opts.nameHints,
+    );
 
   const wantB = mode === "dual" && reasonerB !== null;
   const [resA, resB] = await Promise.all([
@@ -200,8 +291,14 @@ export async function identifySpeakersV2(
   const nameMap: Record<string, string> = {};
   for (const sp of speakers) {
     const a = byIdA.get(sp.id) ?? { name: resA.nameMap[sp.id] };
-    const b = byIdB ? byIdB.get(sp.id) ?? { name: resB!.nameMap[sp.id] } : undefined;
-    const d = adjudicate(sp.id, a ?? {}, wantB ? (b ?? {}) : undefined, transcriptNorm, introBySpeaker.get(sp.id));
+    const b = byIdB ? (byIdB.get(sp.id) ?? { name: resB!.nameMap[sp.id] }) : undefined;
+    const d = adjudicate(
+      sp.id,
+      a ?? {},
+      wantB ? (b ?? {}) : undefined,
+      transcriptNorm,
+      introBySpeaker.get(sp.id),
+    );
     decisions.push(d);
     if (d.finalName) nameMap[sp.id] = d.finalName;
   }
@@ -212,7 +309,9 @@ export async function identifySpeakersV2(
         `identify: kept "${d.speakerId}" generic — passes disagreed (${d.nameA ?? "—"} vs ${d.nameB ?? "—"})`,
       );
     } else if (d.outcome === "tripwire") {
-      logger.info(`identify: "${d.speakerId}" → ${d.finalName} (self-introduction tripwire)`);
+      logger.info(
+        `identify: "${d.speakerId}" → ${d.finalName} (self-introduction tripwire)`,
+      );
     }
   }
 

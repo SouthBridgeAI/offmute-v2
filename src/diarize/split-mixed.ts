@@ -143,7 +143,9 @@ export function splitMixedVoiceSegments(
     });
   }
   if (splits > 0) {
-    logger.info(`split ${splits} mixed-voice boundary(ies) across ${segments.length} segments`);
+    logger.info(
+      `split ${splits} mixed-voice boundary(ies) across ${segments.length} segments`,
+    );
   }
   return out.sort((a, b) => a.start - b.start);
 }

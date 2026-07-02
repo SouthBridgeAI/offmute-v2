@@ -46,7 +46,11 @@ describe("splitMixedVoiceSegments", () => {
   it("does not split on single-word flicker (hysteresis)", () => {
     const ws = words(0, 20, 0.5);
     // One word (2.0-2.5s) belongs to B; everything else A.
-    const utts = [utt("speaker_A", 0, 2.0), utt("speaker_B", 2.0, 2.5), utt("speaker_A", 2.5, 10)];
+    const utts = [
+      utt("speaker_A", 0, 2.0),
+      utt("speaker_B", 2.0, 2.5),
+      utt("speaker_A", 2.5, 10),
+    ];
     const out = splitMixedVoiceSegments([seg(ws)], utts);
     expect(out).toHaveLength(1);
     expect(out[0]!.speaker).toBe("Hrishi");
@@ -68,22 +72,31 @@ describe("splitMixedVoiceSegments", () => {
 describe("countTurnTransitions", () => {
   it("sees conversation partners alternate and over-splits not", () => {
     const conversation = [
-      utt("speaker_A", 0, 5), utt("speaker_B", 5, 8), utt("speaker_A", 8, 12),
-      utt("speaker_B", 12, 14), utt("speaker_A", 14, 20), utt("speaker_B", 20, 22),
+      utt("speaker_A", 0, 5),
+      utt("speaker_B", 5, 8),
+      utt("speaker_A", 8, 12),
+      utt("speaker_B", 12, 14),
+      utt("speaker_A", 14, 20),
+      utt("speaker_B", 20, 22),
     ];
     expect(countTurnTransitions(conversation, "speaker_A", "speaker_B")).toBe(5);
 
     // Over-split: A does the first half, B the second (diarizer re-clustered midway).
     const oversplit = [
-      utt("speaker_A", 0, 5), utt("speaker_A", 5, 10), utt("speaker_A", 10, 15),
-      utt("speaker_B", 15, 20), utt("speaker_B", 20, 25),
+      utt("speaker_A", 0, 5),
+      utt("speaker_A", 5, 10),
+      utt("speaker_A", 10, 15),
+      utt("speaker_B", 15, 20),
+      utt("speaker_B", 20, 25),
     ];
     expect(countTurnTransitions(oversplit, "speaker_A", "speaker_B")).toBe(1);
   });
 
   it("ignores third-party utterances in between", () => {
     const utts = [
-      utt("speaker_A", 0, 5), utt("speaker_C", 5, 6), utt("speaker_A", 6, 10),
+      utt("speaker_A", 0, 5),
+      utt("speaker_C", 5, 6),
+      utt("speaker_A", 6, 10),
       utt("speaker_B", 10, 15),
     ];
     expect(countTurnTransitions(utts, "speaker_A", "speaker_B")).toBe(1);
