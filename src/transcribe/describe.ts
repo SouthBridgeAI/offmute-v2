@@ -12,8 +12,16 @@ export interface MeetingDescription {
   raw: string;
 }
 
-export function descriptionPrompt(fileName: string, instructions?: string): string {
-  return `You are listening to a recording to prepare a transcription engine. Describe what you hear${
+export function descriptionPrompt(
+  fileName: string,
+  instructions?: string,
+  sampleCount = 1,
+): string {
+  const sampleNote =
+    sampleCount > 1
+      ? `You are given ${sampleCount} audio samples from a longer recording — taken from the beginning, middle, and end — plus any keyframes. Speakers may appear in only one sample.`
+      : `You are listening to a recording.`;
+  return `${sampleNote} Your job is to prepare context for a transcription engine. Describe what you hear${
     instructions ? ` (note: ${instructions})` : ""
   }.
 
@@ -38,8 +46,9 @@ export async function describeMeeting(
   files: GeminiFileInput[],
   fileName: string,
   instructions?: string,
+  audioSampleCount = 1,
 ): Promise<MeetingDescription> {
-  const res = await client.generate(model, descriptionPrompt(fileName, instructions), files, {
+  const res = await client.generate(model, descriptionPrompt(fileName, instructions, audioSampleCount), files, {
     temperature: 0.2,
     maxRetries: 3,
     logKind: "describe",

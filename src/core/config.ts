@@ -19,6 +19,12 @@ export interface ApiKeys {
   groq?: string;
   assemblyai?: string;
   anthropic?: string;
+  /** z.ai (GLM models). GLM_API_KEY is accepted as an env alias. */
+  zai?: string;
+  /** Moonshot (Kimi models). */
+  kimi?: string;
+  /** ElevenLabs (Scribe timestamped transcription). */
+  elevenlabs?: string;
 }
 
 /** Which model fills each role. */
@@ -56,7 +62,9 @@ export interface PipelineOptions {
   /** Save intermediates (default true). */
   saveIntermediates?: boolean;
   /** Output formats. */
-  formats?: ("srt" | "md" | "json")[];
+  formats?: OutputFormat[];
+  /** Markdown layout: merged same-speaker paragraphs (default) or one block per turn. */
+  mdStyle?: "merged" | "turns";
   /** Target diarization level. */
   diarizationLevel?: 1 | 2 | 3;
   /** Injected API keys (override env). */
@@ -77,7 +85,12 @@ export interface PipelineOptions {
   llmLog?: boolean;
   /** Log level. */
   logLevel?: "debug" | "info" | "warn" | "error";
+  /** Cooperative cancellation: checked at stage and chunk boundaries. Intermediates
+   * written so far stay on disk, so an aborted run resumes where it stopped. */
+  signal?: AbortSignal;
 }
+
+export type OutputFormat = "srt" | "md" | "json" | "txt";
 
 export type Pass =
   | "preprocess"
@@ -132,6 +145,9 @@ export function resolveKeys(injected?: ApiKeys): ApiKeys {
     groq: injected?.groq || env.GROQ_API_KEY,
     assemblyai: injected?.assemblyai || env.ASSEMBLYAI_API_KEY,
     anthropic: injected?.anthropic || env.ANTHROPIC_API_KEY,
+    zai: injected?.zai || env.ZAI_API_KEY || env.GLM_API_KEY,
+    kimi: injected?.kimi || env.KIMI_API_KEY || env.MOONSHOT_API_KEY,
+    elevenlabs: injected?.elevenlabs || env.ELEVENLABS_API_KEY,
   };
 }
 
@@ -148,6 +164,7 @@ export function resolveOptions(
     | "model"
     | "reasoner"
     | "timestampedProvider"
+    | "signal"
   >
 > &
   Pick<
@@ -159,6 +176,7 @@ export function resolveOptions(
     | "model"
     | "reasoner"
     | "timestampedProvider"
+    | "signal"
   > {
   return {
     input: opts.input,
@@ -186,6 +204,7 @@ export function resolveOptions(
     concurrency: opts.concurrency ?? 4,
     saveIntermediates: opts.saveIntermediates ?? true,
     formats: opts.formats ?? ["md"],
+    mdStyle: opts.mdStyle ?? "merged",
     diarizationLevel: opts.diarizationLevel ?? 2,
     apiKeys: opts.apiKeys,
     model: opts.model,
@@ -196,6 +215,7 @@ export function resolveOptions(
     showProgress: opts.showProgress ?? true,
     llmLog: opts.llmLog ?? true,
     logLevel: opts.logLevel ?? "info",
+    signal: opts.signal,
   };
 }
 

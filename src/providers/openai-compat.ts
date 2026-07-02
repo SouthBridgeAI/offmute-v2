@@ -98,6 +98,12 @@ export class OpenAICompatClient {
         return { text, usage };
       } catch (err) {
         lastError = err instanceof Error ? err.message : String(err);
+        // Some OpenAI-compatible providers reject response_format — drop it and retry
+        // (chatJson keeps a lenient fence-stripping parser as the safety net).
+        if (body.response_format && /response_format/i.test(lastError)) {
+          delete body.response_format;
+          continue;
+        }
         logLlmCall({
           ts: new Date(t0).toISOString(),
           provider: this.providerName,

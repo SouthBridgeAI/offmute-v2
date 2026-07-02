@@ -32,7 +32,7 @@ export const TRANSCRIPT_SCHEMA = {
           tone: {
             type: "ARRAY",
             items: { type: "STRING" },
-            description: "Tone/behavior tags e.g. hesitant, laughing, contemplating, urgent, sarcastic. Empty array if neutral.",
+            description: "Tone tags ONLY when something clearly stands out (laughing, sarcastic, agitated, whispering). Empty array for normal speech — most segments.",
           },
         },
         required: ["speaker", "start", "end", "text"],
@@ -62,17 +62,18 @@ export function transcriptionPrompt(ctx: ChunkContext): string {
     `You are an expert speech transcription engine. Below is audio chunk ${ctx.index} of ${ctx.total} from a recording. Transcribe ALL speech verbatim and diarize it.`,
   );
   parts.push("");
-  parts.push("Output one segment per speaker turn (a new segment whenever the speaker changes, or after a long pause, or at an interruption).");
+  parts.push("Start a NEW segment on EVERY voice change — this is the single most important rule. That includes one-word interjections, backchannels (\"yeah\", \"right\", \"oh my god\"), and replies inside someone else's story. If a different voice says even a single word, it gets its own segment with its own speaker label. Never fold another person's words into the current speaker's segment. Also break on long pauses and interruptions.");
   parts.push("");
   parts.push("For each segment provide:");
   parts.push("- speaker: a label. Use an identified name/role from the roster if you are confident who is speaking; otherwise use 'Speaker A', 'Speaker B', etc. Keep labels CONSISTENT across the chunk.");
   parts.push("- start, end: relative timestamps as mm:ss, where 00:00 is the START of this audio chunk. They must be monotonic and span the full chunk.");
   parts.push("- text: the verbatim words, including fillers (um, uh), false starts, and corrections. Do not paraphrase.");
-  parts.push("- tone: array of behavior/emotion tags. Tag most segments — e.g. confident, hesitant, laughing, sarcastic, urgent, contemplative, whispering, emphatic, questioning, joking, frustrated. Use an empty array ONLY when nothing stands out.");
+  parts.push("- tone: tags ONLY when the delivery clearly stands out — laughing, sarcastic, agitated, whispering, mock-serious, exasperated. Normal conversational speech (even confident/casual/curious speech) gets an EMPTY array. Most segments should have no tone tags; a tag should mean \"a reader would want to know this\".");
   parts.push("");
   parts.push("Rules:");
   parts.push("- Cover the ENTIRE audio with no gaps. Timestamps must be monotonic non-decreasing.");
   parts.push("- Capture interruptions and overlapping talk as separate, adjacent segments even if times overlap.");
+  parts.push("- Listen for voice characteristics (pitch, accent, mic distance), not just content. Two people agreeing with each other are still two segments.");
   parts.push("- Do not invent content not present in the audio. If inaudible, write [inaudible].");
   parts.push("- Keep speaker labels consistent within this chunk; the same voice = same label.");
   if (ctx.description) {

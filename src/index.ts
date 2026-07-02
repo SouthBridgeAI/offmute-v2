@@ -27,5 +27,5 @@ export type { AlignedSegment } from "./align/aligner.js";
 export { assignGlobalSpeakers } from "./diarize/consistency.js";
 export { identifySpeakers } from "./diarize/identify.js";
 export { finalizeSegments } from "./finalize/finalize.js";
-export { formatSrt, formatMarkdown, formatJson } from "./finalize/format.js";
+export { formatSrt, formatMarkdown, formatText, formatJson } from "./finalize/format.js";
 export { parseSrt } from "./utils/srt.js";

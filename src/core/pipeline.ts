@@ -53,9 +53,9 @@ import { alignSegments, type AlignedSegment } from "../align/aligner.js";
 import { fillAsrGaps } from "../align/fill-gaps.js";
 import { assignGlobalSpeakers } from "../diarize/consistency.js";
 import { identifySpeakers } from "../diarize/identify.js";
-import { OpenAICompatClient } from "../providers/openai-compat.js";
+import { resolveReasoner } from "../providers/reasoner.js";
 import { finalizeSegments } from "../finalize/finalize.js";
-import { formatSrt, formatMarkdown, formatJson } from "../finalize/format.js";
+import { formatSrt, formatMarkdown, formatText, formatJson } from "../finalize/format.js";
 import { basename, resolve } from "node:path";
 
 const JSON_OPTS = { encoding: "utf-8" } as const;
@@ -93,6 +93,18 @@ async function mapPool<T, R>(
 
 function has(passes: Pass[], p: Pass): boolean {
   return passes.includes(p);
+}
+
+/** Rethrow an error with a stage tag, e.g. "[asr] fetch failed" — so a failure names
+ * the part of the pipeline it came from. Original stack preserved. */
+function stageTag(name: string): (err: unknown) => never {
+  return (err: unknown) => {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (msg.startsWith(`[${name}]`)) throw err;
+    const e = new Error(`[${name}] ${msg}`);
+    if (err instanceof Error && err.stack) e.stack = err.stack;
+    throw e;
+  };
 }
 
 export async function transcribe(opts: PipelineOptions): Promise<TranscriptResult> {
@@ -161,6 +173,11 @@ export async function transcribe(opts: PipelineOptions): Promise<TranscriptResul
     transcribe: options.model ?? DEFAULT_TRANSCRIBE_MODEL,
     reasoner: options.reasoner ?? DEFAULT_REASONER_MODEL,
   };
+  // Cooperative cancellation: checked at every stage and chunk boundary. Aborting mid-run
+  // leaves intermediates on disk, so the next run resumes from where it stopped.
+  const checkAbort = () => {
+    options.signal?.throwIfAborted();
+  };
 
   if (!(await checkFfmpeg())) throw new Error("ffmpeg/ffprobe not found in PATH");
   if (!keys.gemini) throw new Error("GEMINI_API_KEY (or GOOGLE_API_KEY) is required");
@@ -190,21 +207,27 @@ export async function transcribe(opts: PipelineOptions): Promise<TranscriptResul
   const audioPath = `${options.intermediatesDir}/audio.mp3`;
   const probePath = `${options.intermediatesDir}/probe.json`;
   if (has(passes, "preprocess")) {
+    checkAbort();
     logger.info("=== preprocess ===");
     probeInfo = forceAll ? null : readJson<ProbeResult>(probePath);
     if (!probeInfo) {
-      probeInfo = await probe(options.input);
+      probeInfo = await probe(options.input).catch(stageTag("preprocess"));
       writeJson(probePath, probeInfo);
     }
     if (!existsSync(audioPath) || forceAll) {
       logger.info("extracting audio (mono 16kHz mp3)...");
-      await extractAudio(options.input, audioPath, AUDIO_OPTS);
+      await extractAudio(options.input, audioPath, AUDIO_OPTS).catch(stageTag("preprocess"));
     }
     if (probeInfo.hasVideo) {
       const kfDir = `${options.intermediatesDir}/keyframes`;
       if (!existsSync(kfDir) || forceAll) {
         logger.info("extracting keyframes...");
-        await extractKeyframes(options.input, kfDir, options.screenshotCount);
+        // Keyframes are enrichment, not a requirement — degrade gracefully.
+        await extractKeyframes(options.input, kfDir, options.screenshotCount).catch((err) => {
+          logger.warn(
+            `keyframe extraction failed (continuing audio-only): ${err instanceof Error ? err.message : err}`,
+          );
+        });
       }
     }
   } else {
@@ -219,13 +242,29 @@ export async function transcribe(opts: PipelineOptions): Promise<TranscriptResul
     const descPath = `${options.intermediatesDir}/description.json`;
     description = forceAll ? null : readJson<MeetingDescription>(descPath);
     if (!description) {
+      checkAbort();
       logger.info("=== describe ===");
       const client = new GeminiClient(keys.gemini!);
-      const samplePath = `${options.intermediatesDir}/sample.mp3`;
-      if (!existsSync(samplePath) || forceAll) {
-        await extractChunk(audioPath, samplePath, 0, Math.min(300, duration), AUDIO_OPTS);
+      // Sample beginning + middle + end (not just the opening) so speakers who only
+      // appear later still make the roster. Short files use one whole-file sample.
+      const sampleSpans: [number, number][] =
+        duration <= 360
+          ? [[0, duration]]
+          : [
+              [0, 150],
+              [Math.max(0, duration / 2 - 60), Math.min(duration, duration / 2 + 60)],
+              [Math.max(0, duration - 120), duration],
+            ];
+      const files: { path: string }[] = [];
+      for (let i = 0; i < sampleSpans.length; i++) {
+        const [s, e] = sampleSpans[i]!;
+        const samplePath = `${options.intermediatesDir}/sample_${i}.mp3`;
+        if (!existsSync(samplePath) || forceAll) {
+          await extractChunk(audioPath, samplePath, s, e, AUDIO_OPTS);
+        }
+        files.push({ path: samplePath });
       }
-      const files = [{ path: samplePath }];
+      const audioSampleCount = files.length;
       const kfDir = `${options.intermediatesDir}/keyframes`;
       if (existsSync(kfDir)) {
         for (const f of ["keyframe_000.jpg", "keyframe_001.jpg", "keyframe_002.jpg"]) {
@@ -239,7 +278,8 @@ export async function transcribe(opts: PipelineOptions): Promise<TranscriptResul
         files,
         basename(options.input),
         options.instructions,
-      );
+        audioSampleCount,
+      ).catch(stageTag("describe"));
       writeJson(descPath, description);
       logger.info(`description: ${description.description.slice(0, 120)}...`);
     }
@@ -306,11 +346,37 @@ export async function transcribe(opts: PipelineOptions): Promise<TranscriptResul
     const llmDir = `${options.intermediatesDir}/llm`;
     mkdirSync(llmDir, { recursive: true });
 
+    // Live partial output: as chunks complete, keep a coarse-timed partial transcript
+    // next to the final outputs. A stopped/crashed run still leaves something readable.
+    const partialPath = `${options.outputDir}/${basename(options.input, ext(options.input))}.partial.md`;
+    const completed: ChunkTranscriptionResult[] = [];
+    const writePartial = () => {
+      try {
+        const segs = completed
+          .flatMap((r) => r.segments)
+          .sort((a, b) => a.startSec - b.startSec);
+        if (segs.length === 0) return;
+        const lines = segs.map((s) => {
+          const mm = Math.floor(s.startSec / 60).toString().padStart(2, "0");
+          const ss = Math.floor(s.startSec % 60).toString().padStart(2, "0");
+          return `[${mm}:${ss}] **${s.speaker}**: ${s.text}`;
+        });
+        writeFileSync(
+          partialPath,
+          `> Partial transcript (run in progress — coarse LLM timings, speakers not yet unified)\n\n${lines.join("\n\n")}\n`,
+        );
+      } catch {
+        /* partials are best-effort */
+      }
+    };
+
     llmChunkResults = await mapPool(runChunks, options.concurrency, async (chunk) => {
+      checkAbort();
       const parsedPath = `${llmDir}/chunk_${String(chunk.index).padStart(2, "0")}_parsed.json`;
       const cached = forceAll ? null : readJson<ChunkTranscriptionResult>(parsedPath);
       if (cached && cached.segments.length > 0) {
         logger.info(`chunk ${chunk.index}: cached (${cached.segments.length} segments)`);
+        completed.push(cached);
         return tagWith(cached, chunk);
       }
       const chunkPath = `${llmDir}/chunk_${String(chunk.index).padStart(2, "0")}.mp3`;
@@ -353,6 +419,8 @@ export async function transcribe(opts: PipelineOptions): Promise<TranscriptResul
         `${llmDir}/chunk_${String(chunk.index).padStart(2, "0")}_raw.json`,
         result.raw,
       );
+      completed.push(result);
+      writePartial();
       return tagWith(result, chunk);
     });
 
@@ -409,6 +477,7 @@ export async function transcribe(opts: PipelineOptions): Promise<TranscriptResul
     hasDiarization?: boolean;
   } | null = null;
   if (has(passes, "timestamped") || has(passes, "align")) {
+    checkAbort();
     const provider = options.timestampedProvider ?? "assemblyai";
     if (provider === "whisper-groq") {
       logger.info("=== timestamped (Groq Whisper — no diarization) ===");
@@ -420,7 +489,7 @@ export async function transcribe(opts: PipelineOptions): Promise<TranscriptResul
       const { readFile } = await import("node:fs/promises");
       const buf = await readFile(audioPath);
       const groq = new WhisperGroqClient(keys.groq!);
-      asrResult = await groq.transcribe(buf);
+      asrResult = await groq.transcribe(buf).catch(stageTag("asr"));
       writeJson(`${options.intermediatesDir}/timestamped.json`, asrResult);
     } else {
       logger.info("=== timestamped (AssemblyAI) ===");
@@ -432,7 +501,7 @@ export async function transcribe(opts: PipelineOptions): Promise<TranscriptResul
         apiKey: keys.assemblyai!,
         cacheDir: `${options.intermediatesDir}/assemblyai`,
       });
-      asrResult = await aai.transcribe(audioPath);
+      asrResult = await aai.transcribe(audioPath).catch(stageTag("asr"));
       writeJson(`${options.intermediatesDir}/timestamped.json`, asrResult);
     }
   } else {
@@ -489,36 +558,37 @@ export async function transcribe(opts: PipelineOptions): Promise<TranscriptResul
   }
 
   // ---------- 6.5 IDENTIFY (level 3) ----------
-  if (
-    options.diarizationLevel >= 3 &&
-    has(passes, "identify") &&
-    keys.deepseek &&
-    description
-  ) {
-    logger.info("=== identify (DeepSeek) ===");
-    const dsClient = OpenAICompatClient.fromProvider(
-      "deepseek",
-      keys.deepseek,
-      models.reasoner,
-    );
-    const id = await identifySpeakers(
-      dsClient,
-      models.reasoner,
-      segments.map((s) => ({ speaker: s.speaker, text: s.text })),
-      speakers,
-      description.roster,
-      options.knownSpeakers,
-    );
-    logger.info(
-      `identified ${Object.keys(id.nameMap).length} speakers: ${JSON.stringify(id.nameMap)}`,
-    );
-    writeJson(`${options.intermediatesDir}/identified.json`, id);
-    segments = segments.map((s) =>
-      id.nameMap[s.speaker] ? { ...s, speakerName: id.nameMap[s.speaker] } : s,
-    );
-    speakers = speakers.map((sp) =>
-      id.nameMap[sp.id] ? { ...sp, name: id.nameMap[sp.id] } : sp,
-    );
+  // Decoupled from DeepSeek and from the describe pass: any reasoner-capable key works
+  // (falls back to Gemini, whose key transcription already required), and a missing
+  // roster just means less context — not a silently skipped pass.
+  if (options.diarizationLevel >= 3 && has(passes, "identify")) {
+    const reasoner = resolveReasoner(options.reasoner ?? DEFAULT_REASONER_MODEL, keys);
+    if (!reasoner) {
+      logger.warn(
+        "identify: no reasoner-capable API key found (DEEPSEEK/GEMINI/OPENAI/…) — skipping speaker naming",
+      );
+    } else {
+      logger.info(`=== identify (${reasoner.info.model} via ${reasoner.info.provider}) ===`);
+      checkAbort();
+      const id = await identifySpeakers(
+        reasoner.client,
+        reasoner.info.model,
+        segments.map((s) => ({ speaker: s.speaker, text: s.text })),
+        speakers,
+        description?.roster ?? "(no roster available — infer from the transcript alone)",
+        options.knownSpeakers,
+      ).catch(stageTag("identify"));
+      logger.info(
+        `identified ${Object.keys(id.nameMap).length} speakers: ${JSON.stringify(id.nameMap)}`,
+      );
+      writeJson(`${options.intermediatesDir}/identified.json`, id);
+      segments = segments.map((s) =>
+        id.nameMap[s.speaker] ? { ...s, speakerName: id.nameMap[s.speaker] } : s,
+      );
+      speakers = speakers.map((sp) =>
+        id.nameMap[sp.id] ? { ...sp, name: id.nameMap[sp.id] } : sp,
+      );
+    }
   }
 
   // ---------- 7. FINALIZE ----------
@@ -562,10 +632,23 @@ export async function transcribe(opts: PipelineOptions): Promise<TranscriptResul
     if (fmt === "md")
       writeFileSync(
         `${options.outputDir}/${base}.md`,
-        formatMarkdown(result, { title: base }),
+        formatMarkdown(result, { title: base, mdStyle: options.mdStyle }),
+      );
+    if (fmt === "txt")
+      writeFileSync(
+        `${options.outputDir}/${base}.txt`,
+        formatText(result, { title: base }),
       );
     if (fmt === "json")
       writeFileSync(`${options.outputDir}/${base}.json`, formatJson(result));
+  }
+  // The run completed — the coarse partial is superseded by the real outputs.
+  try {
+    const base = basename(options.input, ext(options.input));
+    const partial = `${options.outputDir}/${base}.partial.md`;
+    if (existsSync(partial)) (await import("node:fs/promises")).unlink(partial);
+  } catch {
+    /* best-effort */
   }
   logger.info(`outputs written to ${options.outputDir}`);
   return result;
