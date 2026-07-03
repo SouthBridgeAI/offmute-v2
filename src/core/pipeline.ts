@@ -650,45 +650,58 @@ export async function transcribe(opts: PipelineOptions): Promise<TranscriptResul
       const mode = options.identifyMode;
       const reasonerB =
         mode === "dual" ? resolveSecondReasoner(reasonerA.info, keys) : null;
+      // Cached naming: a re-run (e.g. for another output format) reuses the verified
+      // names instead of re-paying the reasoners. Cached only when it actually named
+      // someone — an empty result usually means a transient failure worth retrying.
+      const idCachePath = `${options.intermediatesDir}/identified.json`;
+      const cachedId = forceAll
+        ? null
+        : readJson<{ nameMap?: Record<string, string> }>(idCachePath);
+      let nameMap: Record<string, string> | null = null;
+      if (cachedId?.nameMap && Object.keys(cachedId.nameMap).length > 0) {
+        logger.info("=== identify (cached) ===");
+        nameMap = cachedId.nameMap;
+      } else {
+        logger.info(
+          `=== identify (${reasonerA.info.model}${reasonerB ? ` + ${reasonerB.info.model} second opinion` : ""}) ===`,
+        );
+        checkAbort();
+        const id = await identifySpeakersV2(
+          {
+            client: reasonerA.client,
+            model: reasonerA.info.model,
+            provider: reasonerA.info.provider,
+          },
+          reasonerB
+            ? {
+                client: reasonerB.client,
+                model: reasonerB.info.model,
+                provider: reasonerB.info.provider,
+              }
+            : null,
+          segments.map((s) => ({ speaker: s.speaker, text: s.text })),
+          speakers,
+          {
+            roster:
+              description?.roster ??
+              "(no roster available — infer from the transcript alone)",
+            knownSpeakers: options.knownSpeakers,
+            mode,
+            nameHints,
+            sourceFileName: basename(options.input),
+          },
+        ).catch(stageTag("identify"));
+        writeJson(idCachePath, id);
+        nameMap = id.nameMap;
+      }
       logger.info(
-        `=== identify (${reasonerA.info.model}${reasonerB ? ` + ${reasonerB.info.model} second opinion` : ""}) ===`,
+        `identified ${Object.keys(nameMap).length} speakers: ${JSON.stringify(nameMap)}`,
       );
-      checkAbort();
-      const id = await identifySpeakersV2(
-        {
-          client: reasonerA.client,
-          model: reasonerA.info.model,
-          provider: reasonerA.info.provider,
-        },
-        reasonerB
-          ? {
-              client: reasonerB.client,
-              model: reasonerB.info.model,
-              provider: reasonerB.info.provider,
-            }
-          : null,
-        segments.map((s) => ({ speaker: s.speaker, text: s.text })),
-        speakers,
-        {
-          roster:
-            description?.roster ??
-            "(no roster available — infer from the transcript alone)",
-          knownSpeakers: options.knownSpeakers,
-          mode,
-          nameHints,
-          sourceFileName: basename(options.input),
-        },
-      ).catch(stageTag("identify"));
-      logger.info(
-        `identified ${Object.keys(id.nameMap).length} speakers: ${JSON.stringify(id.nameMap)}`,
-      );
-      writeJson(`${options.intermediatesDir}/identified.json`, id);
+      const nm = nameMap;
       segments = segments.map((s) =>
-        id.nameMap[s.speaker] ? { ...s, speakerName: id.nameMap[s.speaker] } : s,
+        nm[s.speaker] ? { ...s, speakerName: nm[s.speaker] } : s,
       );
-      speakers = speakers.map((sp) =>
-        id.nameMap[sp.id] ? { ...sp, name: id.nameMap[sp.id] } : sp,
-      );
+      speakers = speakers.map((sp) => (nm[sp.id] ? { ...sp, name: nm[sp.id] } : sp));
     }
   }
 
@@ -736,6 +749,9 @@ export async function transcribe(opts: PipelineOptions): Promise<TranscriptResul
     },
   };
   const result: TranscriptResult = { segments: finalSegments, speakers, metadata };
+  // The full result also lands in the cache so post-hoc tools (rename) can work
+  // straight from the media path without the user having asked for --formats json.
+  writeJson(`${options.intermediatesDir}/result.json`, result);
 
   for (const fmt of options.formats) {
     const base = basename(options.input, ext(options.input));

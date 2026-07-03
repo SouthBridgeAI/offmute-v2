@@ -20,6 +20,42 @@ const TICK = chalk.green("✓");
 const WARN = chalk.yellow("▲");
 const FAIL = chalk.red("✗");
 
+// ─── Shimmer ─────────────────────────────────────────────────────────────────
+// The Claude Code / oh-my-pi "shimmer": re-render the string every frame with a
+// brightness band sweeping across it at a FIXED cells-per-second velocity (so long
+// labels don't shimmer faster), each char's intensity a cosine bump of its distance
+// from the band crest, mapped to three color tiers. Same-tier runs are coalesced so
+// a frame emits a handful of escape codes, not one per character.
+const SHIMMER_SPEED_CELLS_PER_S = 25;
+const SHIMMER_PADDING = 8; // band travels off both ends so the sweep "breathes"
+const SHIMMER_HALF_WIDTH = 5;
+
+function shimmer(text: string, now: number): string {
+  const chars = [...text];
+  const period = chars.length + SHIMMER_PADDING * 2;
+  const pos = ((now / 1000) * SHIMMER_SPEED_CELLS_PER_S) % period;
+  let out = "";
+  let runTier = -1;
+  let run = "";
+  const flush = () => {
+    if (!run) return;
+    out += runTier === 2 ? chalk.bold.whiteBright(run) : runTier === 1 ? chalk.white(run) : chalk.dim(run);
+    run = "";
+  };
+  for (let i = 0; i < chars.length; i++) {
+    const dist = Math.abs(i + SHIMMER_PADDING - pos);
+    const intensity = dist >= SHIMMER_HALF_WIDTH ? 0 : 0.5 * (1 + Math.cos((Math.PI * dist) / SHIMMER_HALF_WIDTH));
+    const tier = intensity >= 0.65 ? 2 : intensity >= 0.2 ? 1 : 0;
+    if (tier !== runTier) {
+      flush();
+      runTier = tier;
+    }
+    run += chars[i];
+  }
+  flush();
+  return out;
+}
+
 /** Friendlier display names for pipeline stages. */
 const STAGE_LABELS: Record<string, string> = {
   preprocess: "preparing media",
@@ -54,7 +90,9 @@ let lineDirty = false;
 
 function fmtElapsed(ms: number): string {
   const s = Math.floor(ms / 1000);
-  return s >= 60 ? `${Math.floor(s / 60)}m${(s % 60).toString().padStart(2, "0")}s` : `${s}s`;
+  return s >= 60
+    ? `${Math.floor(s / 60)}m${(s % 60).toString().padStart(2, "0")}s`
+    : `${s}s`;
 }
 
 function clearLine(): void {
@@ -66,16 +104,17 @@ function clearLine(): void {
 
 function drawSpinner(): void {
   if (!stage) return;
+  const now = Date.now();
   const f = chalk.cyan(FRAMES[frame % FRAMES.length]);
   frame++;
-  const elapsed = chalk.dim(fmtElapsed(Date.now() - stage.startedAt));
+  const elapsed = chalk.dim(fmtElapsed(now - stage.startedAt));
   const chunks =
     stage.chunksTotal !== undefined
       ? chalk.dim(` ${stage.chunksDone ?? 0}/${stage.chunksTotal} chunks`)
       : "";
   const detail = stage.detail ? chalk.dim(` · ${stage.detail}`) : "";
-  const line = `${f} ${chalk.bold(stage.label)}${chunks}${detail} ${elapsed}`;
-  process.stdout.write(`\r\x1b[2K${line.slice(0, (process.stdout.columns || 100) + 20)}`);
+  const line = `${f} ${shimmer(stage.label, now)}${chunks}${detail} ${elapsed}`;
+  process.stdout.write(`\r\x1b[2K${line}`);
   lineDirty = true;
 }
 
@@ -129,7 +168,10 @@ function handleLine(level: "debug" | "info" | "warn" | "error", msg: string): vo
     stage.chunksDone = 0;
     return;
   }
-  if (/^\[llm\] chunk \d+ ok|^chunk \d+: cached/.test(msg) && stage?.chunksTotal !== undefined) {
+  if (
+    /^\[llm\] chunk \d+ ok|^chunk \d+: cached/.test(msg) &&
+    stage?.chunksTotal !== undefined
+  ) {
     stage.chunksDone = (stage.chunksDone ?? 0) + 1;
     drawSpinner();
     return;
@@ -139,7 +181,8 @@ function handleLine(level: "debug" | "info" | "warn" | "error", msg: string): vo
   if (msg.startsWith("estimated cost")) {
     const pretty = msg.replace(
       /^estimated cost (~\$[\d.]+)(.*)$/,
-      (_, amt: string, rest: string) => `${chalk.bold("estimate")} ${chalk.yellow(amt)}${chalk.dim(rest)}`,
+      (_, amt: string, rest: string) =>
+        `${chalk.bold("estimate")} ${chalk.yellow(amt)}${chalk.dim(rest)}`,
     );
     println(`  ${pretty}`);
     return;
@@ -160,7 +203,9 @@ function handleLine(level: "debug" | "info" | "warn" | "error", msg: string): vo
   }
   if (msg.startsWith("description:")) {
     const text = msg.slice(12).trim().replace(/\s+/g, " ");
-    println(chalk.dim(`  ${text.slice(0, Math.max(40, (process.stdout.columns || 100) - 4))}`));
+    println(
+      chalk.dim(`  ${text.slice(0, Math.max(40, (process.stdout.columns || 100) - 4))}`),
+    );
     return;
   }
   if (msg.startsWith("intermediates:")) {
@@ -195,9 +240,11 @@ export function configureUi(opts: UiOptions): void {
     handleLine(level, msg);
     return true; // swallow the plain line
   });
+  // ~15fps: the shimmer advances ≤2 cells per frame at 25 cells/s — smooth without
+  // burning CPU on a transcription tool.
   timer = setInterval(() => {
     if (stage) drawSpinner();
-  }, 100);
+  }, 66);
   timer.unref();
 }
 
@@ -243,12 +290,23 @@ export function tipsBlock(tips: string[]): void {
   }
 }
 
+/** One quiet line of horn-tooting at the very end. */
+export function starFooter(): void {
+  process.stdout.write(
+    chalk.dim(
+      `\n  state-of-the-art open diarization · if it earned it: ${chalk.reset.dim.underline("github.com/SouthBridgeAI/offmute-v2")} ${chalk.yellow("★")}\n`,
+    ),
+  );
+}
+
 export function errorBlock(message: string, hint?: string): void {
   clearLine();
   if (timer) clearInterval(timer);
   if (stage) {
     // The open stage FAILED — mark it so, never tick it.
-    process.stderr.write(`${FAIL} ${stage.label} ${chalk.dim(fmtElapsed(Date.now() - stage.startedAt))}\n`);
+    process.stderr.write(
+      `${FAIL} ${stage.label} ${chalk.dim(fmtElapsed(Date.now() - stage.startedAt))}\n`,
+    );
     stage = null;
   }
   process.stderr.write(`\n${FAIL} ${chalk.red(message)}\n`);

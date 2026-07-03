@@ -26,8 +26,10 @@ import {
   banner,
   outputsBlock,
   tipsBlock,
+  starFooter,
   errorBlock,
 } from "./utils/ui.js";
+import { maybeFirstRunCheck } from "./commands/first-run.js";
 import type { TranscriptResult } from "./core/types.js";
 
 let packageVersion = "0.0.0";
@@ -76,18 +78,18 @@ interface TranscribeCliOpts {
 }
 
 /** Contextual next-step suggestions based on how THIS run actually went. */
-function buildTips(result: TranscriptResult, opts: TranscribeCliOpts, input: string): string[] {
+function buildTips(
+  result: TranscriptResult,
+  opts: TranscribeCliOpts,
+  input: string,
+): string[] {
   const tips: string[] = [];
-  const jsonPath = join(
-    opts.output ?? ".",
-    basename(input).replace(/\.[^.]+$/, "") + ".json",
-  );
   const genericSpeakers = result.speakers.filter(
     (sp) => !sp.name || /^Speaker [A-Z]$/.test(sp.name),
   );
   if (genericSpeakers.length > 0 && !opts.speakers) {
     tips.push(
-      `${genericSpeakers.length} speaker(s) stayed generic — tell me who was there next time (--speakers "Alice,Bob"), or retcon now: offmute-v2 rename "${jsonPath}" "${genericSpeakers[0]!.id}=Name" (needs --formats json)`,
+      `${genericSpeakers.length} speaker(s) stayed generic — retcon instantly: offmute-v2 rename "${input}" "${genericSpeakers[0]!.id}=Name", or pass --speakers "Alice,Bob" next time`,
     );
   }
   if (!opts.model && result.metadata.duration > 1500) {
@@ -96,9 +98,7 @@ function buildTips(result: TranscriptResult, opts: TranscribeCliOpts, input: str
     );
   }
   if (!opts.formats && !opts.summary) {
-    tips.push(
-      "want a shareable page and action items? --formats md,html --summary",
-    );
+    tips.push("want a shareable page and action items? --formats md,html --summary");
   }
   if (!opts.instructions) {
     tips.push(
@@ -114,10 +114,12 @@ function errorHint(msg: string): string | undefined {
     return "that file doesn't look like readable media — is it actually audio/video?";
   if (/not found in PATH|ffmpeg\/ffprobe/.test(msg))
     return "install ffmpeg first: brew install ffmpeg (macOS) or apt install ffmpeg";
-  if (/API_KEY/.test(msg)) return "run `offmute-v2 doctor` to see which keys are set and working";
+  if (/API_KEY/.test(msg))
+    return "run `offmute-v2 doctor` to see which keys are set and working";
   if (/fetch failed|ENOTFOUND|ECONNRESET/.test(msg))
     return "network hiccup — just re-run; everything finished so far is cached";
-  if (/Input file not found/.test(msg)) return "check the path (tab-completion is your friend)";
+  if (/Input file not found/.test(msg))
+    return "check the path (tab-completion is your friend)";
   return undefined;
 }
 
@@ -128,9 +130,11 @@ async function runTranscribe(input: string, opts: TranscribeCliOpts): Promise<vo
   if (opts.speakers && level < 3) level = 3;
 
   // Pretty renderer: TTY runs only; debug logs and piped output stay plain.
-  const pretty = process.stdout.isTTY === true && opts.progress && opts.logLevel !== "debug";
+  const pretty =
+    process.stdout.isTTY === true && opts.progress && opts.logLevel !== "debug";
   configureUi({ enabled: pretty });
   banner(packageVersion, basename(input));
+  if (pretty) maybeFirstRunCheck(packageVersion);
 
   const t0 = Date.now();
   const result = await transcribe({
@@ -173,13 +177,18 @@ async function runTranscribe(input: string, opts: TranscribeCliOpts): Promise<vo
     const formats = opts.formats ? opts.formats.split(",") : ["md"];
     const files = formats.map((f) => join(outDir, `${base}.${f.trim()}`));
     if (opts.summary) files.push(join(outDir, `${base}.summary.md`));
-    const cost = result.metadata.cost ? ` · ~$${result.metadata.cost.actualUsd.toFixed(2)}` : "";
-    const wall = result.metadata.wallMs ? ` · ${formatDuration(Math.round(result.metadata.wallMs / 1000))}` : "";
+    const cost = result.metadata.cost
+      ? ` · ~$${result.metadata.cost.actualUsd.toFixed(2)}`
+      : "";
+    const wall = result.metadata.wallMs
+      ? ` · ${formatDuration(Math.round(result.metadata.wallMs / 1000))}`
+      : "";
     outputsBlock(
       files,
       `${result.segments.length} segments · ${result.speakers.length} speakers · ${formatDuration(Math.round(result.metadata.duration))} of audio${cost}${wall}`,
     );
     tipsBlock(buildTips(result, opts, input));
+    starFooter();
     process.stdout.write("\n");
   } else {
     console.log(`Done. ${result.segments.length} segments.`);
@@ -364,19 +373,26 @@ program
   );
 
 program
-  .command("rename <result-json> <mappings...>")
+  .command("rename <media-or-json> <mappings...>")
   .description(
-    'retcon speaker names without reprocessing, e.g. rename out.json "Speaker B=Ang Li"',
+    'retcon speaker names without reprocessing, e.g. rename meeting.mp4 "Speaker B=Ang Li" (uses the run cache)',
   )
-  .option("--formats <list>", "formats to regenerate next to the json", "md,srt,txt")
+  .option("--formats <list>", "formats to regenerate", "md")
   .option("--md-style <style>", "markdown layout: merged | turns", "merged")
+  .option("-o, --output <dir>", "where to write regenerated files (default: next to the input)")
+  .option("-i, --intermediates <dir>", "cache dir override (if the run used -i)")
   .action(
     (
-      jsonPath: string,
+      path: string,
       mappings: string[],
-      opts: { formats: string; mdStyle?: "merged" | "turns" },
+      opts: {
+        formats: string;
+        mdStyle?: "merged" | "turns";
+        output?: string;
+        intermediates?: string;
+      },
     ) => {
-      runRename(jsonPath, mappings, opts);
+      runRename(path, mappings, opts);
     },
   );
 
