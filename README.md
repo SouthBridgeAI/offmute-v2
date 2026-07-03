@@ -1,29 +1,46 @@
+<!-- prettier-ignore-start -->
+<div align="center">
+
+<img src="https://raw.githubusercontent.com/SouthBridgeAI/offmute-v2/master/docs/assets/mascot.png" alt="offmute — a frog that listens carefully" width="460">
+
 # offmute-v2
 
-**State-of-the-art meeting transcription: every word on the right millisecond, every speaker told apart and named.**
+**State-of-the-art meeting transcription.**<br>
+Every word on the right millisecond. Every speaker told apart — and named.
+
+<br>
 
 ```bash
 npx offmute-v2@fable meeting.mp4
 ```
 
-[npm](https://www.npmjs.com/package/offmute-v2)
-[license](LICENSE)
-[node](#requirements)
-[built by two frontier models](#the-story)
+[![npm](https://img.shields.io/npm/v/offmute-v2?color=cb3837&logo=npm)](https://www.npmjs.com/package/offmute-v2)&nbsp;
+[![license](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)&nbsp;
+[![node](https://img.shields.io/badge/node-%E2%89%A520-339933?logo=node.js&logoColor=white)](#requirements)&nbsp;
+[![built by three frontier models](https://img.shields.io/badge/built%20by-GLM%20%C3%97%20Opus%20%C3%97%20Fable-8A2BE2)](#the-story)
 
-[Quick start](#quick-start) · [What you get](#what-you-get) · [Why it's accurate](#why-its-accurate) ·
-[Daemon mode](#daemon-mode) · [Costs](#costs-you-can-see) · [CLI](#cli-reference) · [Library](#library) · [The story](#the-story)
+**[Quick start](#quick-start)** · **[What you get](#what-you-get)** · **[Why it's accurate](#why-its-accurate)** · **[Daemon](#daemon-mode)** · **[Costs](#costs-you-can-see)** · **[CLI](#cli-reference)** · **[Library](#library)** · **[The story](#the-story)**
+
+</div>
+<!-- prettier-ignore-end -->
 
 ---
 
-_the eternal diarization problem. Tony had one unknown speaker and still needed help._
+<div align="center">
+
+<img src="https://raw.githubusercontent.com/SouthBridgeAI/offmute-v2/master/docs/assets/whos-speaking.png" alt='Iron Man: "Who&apos;s speaking?" — Ant-Man, inside the suit: "It&apos;s your conscience. We don&apos;t talk a lot these days."' width="440">
+
+_the eternal diarization problem — Tony had **one** unknown speaker and an AI in his helmet, and still needed help_
+
+</div>
 
 Speech-to-text is a solved problem. _Meetings_ are not: who said what, through interruptions,
 across an hour, with names attached and timestamps you can trust. Every tool picks one half —
 ASR services nail the clock but garble the people; LLMs understand the people but
 [hallucinate the clock](#why-its-accurate). offmute-v2 runs both and fuses them, word by word.
 
-The result: **best in class WER, ~99% speaker attribution, sub-second turn boundaries** on hand-checked real recordings — with speakers identified _by name_ from context alone, and every
+The result: **best-in-class WER, ~99% speaker attribution, sub-second turn boundaries** on
+hand-checked real recordings — with speakers identified _by name_ from context alone, and every
 name verified by a second model before it ships.
 
 ## Quick start
