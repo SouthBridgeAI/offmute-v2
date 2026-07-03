@@ -1,346 +1,298 @@
 <div align="center">
 
-# offmute-v2 🎙️⏱️
+<img src="docs/assets/mascot.png" alt="offmute — a frog that listens carefully" width="520">
 
-### `npx offmute-v2 meeting.mp4`
+# offmute-v2
 
-**Timestamp-correct, diarized meeting transcription.** Point it at a video or audio file and get
-back a transcript where every speaker turn lands on the right millisecond — labelled with the
-speaker's name (when it can be inferred) and their tone — as **SRT**, **Markdown**, and **JSON**.
+**State-of-the-art meeting transcription: every word on the right millisecond, every speaker told apart and named.**
+
+```bash
+npx offmute-v2@fable meeting.mp4
+```
 
 [![npm](https://img.shields.io/npm/v/offmute-v2?color=cb3837&logo=npm)](https://www.npmjs.com/package/offmute-v2)
 [![license](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 [![node](https://img.shields.io/badge/node-%E2%89%A520-339933?logo=node.js&logoColor=white)](#requirements)
+[![built by two frontier models](https://img.shields.io/badge/built%20by-GLM%20%C3%97%20Opus%20%C3%97%20Fable-8A2BE2)](#the-story)
 
-📝 **Read the full write-up — _"offmute-v2: GLM vs Opus"_ — coming soon at
-[southbridge.ai/blog/offmute-v2-glm-vs-opus](http://southbridge.ai/blog/offmute-v2-glm-vs-opus)**
+[Quick start](#quick-start) · [What you get](#what-you-get) · [Why it's accurate](#why-its-accurate) ·
+[Daemon mode](#daemon-mode) · [Costs](#costs-you-can-see) · [CLI](#cli-reference) · [Library](#library) · [The story](#the-story)
 
 </div>
 
 ---
 
-It's the successor to [offmute](https://github.com/southbridgeai/offmute): the same great diarized,
-tone-aware transcripts — now with **real timestamps**, SRT output, a resumable pipeline, and a
-browser build. No single model is good at everything, so offmute-v2 uses each for what it's best at
-and **fuses** them.
+Speech-to-text is a solved problem. *Meetings* are not: who said what, through interruptions,
+across an hour, with names attached and timestamps you can trust. Every tool picks one half —
+ASR services nail the clock but garble the people; LLMs understand the people but
+[hallucinate the clock](#why-its-accurate). offmute-v2 runs both and fuses them, word by word.
+
+The result: **~8% word error rate, ~99% speaker attribution, sub-second turn boundaries** on
+hand-checked real recordings — with speakers identified *by name* from context alone, and every
+name verified by a second model before it ships.
+
+## Quick start
 
 ```bash
-export GEMINI_API_KEY=...        # multimodal understanding (or GOOGLE_API_KEY)
-export ASSEMBLYAI_API_KEY=...    # word-level timing
+export GEMINI_API_KEY=...        # the ears  (aistudio.google.com/apikey)
+export ASSEMBLYAI_API_KEY=...    # the clock (assemblyai.com — $0.15/hr)
 
-npx offmute-v2 meeting.mp4 --instructions "Panel of founders; label them by name."
-# → meeting.md   (written right next to meeting.mp4)
+npx offmute-v2@fable meeting.mp4
+# → meeting.md, right next to meeting.mp4
 ```
 
-That's it. `bunx offmute-v2 meeting.mp4` works too.
+That's the whole thing. First run checks your setup and tells you what any missing keys would
+unlock. Every run shows you what it will cost before spending, and what it spent after:
+
+```text
+offmute-v2 0.1.0-fable.0  team-call.mp4
+
+  estimate ~$0.30  [gemini-3.1-pro-preview: 4 chunks + describe ≈ $0.22 · assemblyai: 28min ≈ $0.07 · …]
+✓ preparing media · extracting keyframes 28s
+✓ listening for context 41s
+✓ transcribing 3/3 chunks 38s
+✓ timestamps (AssemblyAI) · 154 utterances, 5813 words, 2 speakers 23s
+✓ aligning timestamps · split 3 mixed-voice boundaries 0s
+✓ resolving speakers 0s
+  ◆ identified 3 speakers: {"Speaker A":"Hrishi","Speaker B":"Chibi","Speaker C":"Daniel"}
+✓ naming speakers (deepseek-chat + gemini-flash-latest second opinion) 12s
+✓ finalizing · 65 segments 0s
+  receipt 6 LLM calls · 63k in / 12k out · ~$0.32 · 2m49s
+
+  → /Users/you/team-call.md
+
+65 segments · 3 speakers · 23m of audio · ~$0.32 · 2m 49s
+```
 
 ## What you get
 
-A clean, sub-second-aligned, speaker-labelled transcript with tone. By default offmute-v2 writes a
-**single `meeting.md` next to your input file** — add `--formats srt,md,json` (and/or `-o <dir>`) for
-SubRip subtitles and JSON. The same content, three ways:
-
-**`meeting.srt`** (`--formats srt` — drop straight onto the video):
-
-```srt
-1
-00:00:00,160 --> 00:00:00,720
-Speaker D: GPU
-
-2
-00:00:01,199 --> 00:00:05,440
-Presenter: And I'm inspired. I think I'm going to apply to NTU this fall. (confident, joking)
-```
-
-**`meeting.md`** (the **default** — skimmable, grouped by speaker, with talk-time):
+A transcript that reads like a person took minutes, timed like a machine kept the clock:
 
 ```markdown
-_Duration: 1914s · Speakers: 5_
-
 ## Speakers
 
-- **Presenter** (1461s)
-- **Speaker B** (97s) · **Speaker C** (87s) · ...
+- **Hanjun Kim** — 4m 37s
+- **Ang Li** — 6m 30s
+- **Moderator** — 5m 30s
 
 ## Transcript
 
-[00:00] **Speaker D**: GPU
-[00:01] **Presenter** _(confident, joking)_: And I'm inspired. I think I'm going to apply to NTU this fall.
+`[00:32]` **Hayden Salmon:** I said 25%. I was wrong.
+
+`[00:35]` **Ang Li:** I said 5%.
+
+`[00:46]` **Hanjun Kim:** Hey everybody. I'm Hanjun Kim. I'm a strategy professor at INSEAD,
+and I study how the economics of building, scaling, and designing companies are changing with AI.
 ```
 
-**`meeting.json`** (`--formats json`) — every segment with `start`/`end`, `speaker`, `text`,
-`tone[]`, `timingSource`, `confidence`, and word-level timings — for downstream tooling.
+Same-speaker runs merge into readable paragraphs; tone shows up only when it matters
+(*(laughing)*, *(sarcastic)*) instead of decorating every line. One file by default; five formats
+when you want them:
+
+| format | what it's for |
+| ------ | ------------- |
+| `md` *(default)* | the transcript you actually read — merged paragraphs, `[mm:ss]` anchors |
+| `srt`  | subtitles — cue width capped, timing word-accurate, drop straight onto the video |
+| `html` | one self-contained shareable page — speaker colors, click-to-copy timestamps, no JS deps |
+| `txt`  | plain text for grepping and piping |
+| `json` | every segment with `start`/`end`, speaker, tone, confidence, word-level timings |
+
+Add `--summary` for a `meeting.summary.md` with the TL;DR, decisions, and action items.
 
 ## Why it's accurate
 
-LLMs are brilliant at _understanding_ speech (who's talking, through interruptions, in a crowd,
-with tone) but [terrible at timestamps](#how-it-works). ASR models are the opposite: sub-second
-timing, but mediocre diarization and no sense of tone. offmute-v2 runs **both** and marries them:
+Multimodal LLMs are the best diarizers in the world — they follow speakers through
+interruptions, infer names from "hey everybody, I'm Hanjun", and hear tone. They are also
+*hopeless* at time: left alone, Gemini's timestamps drift **minutes** over a long recording.
+ASR services are the mirror image: word timings accurate to centiseconds, but speakers as
+anonymous clusters and text that keeps every "um".
 
-| Job                                               | Tool                                | Why                                                                   |
-| ------------------------------------------------- | ----------------------------------- | --------------------------------------------------------------------- |
-| **WHO / HOW** — speakers, names, tone, hard audio | multimodal **LLM** (Gemini)         | infers names from context, hears tone, handles crowds & interruptions |
-| **WHEN** — word-level timestamps                  | **ASR** (AssemblyAI / Groq Whisper) | sub-second accurate; LLM timestamps drift _minutes_ over a long file  |
-| **fuse**                                          | edit-distance **alignment**         | transfers the ASR's clock onto the LLM's richer words                 |
+So each does the half it's the best in the world at:
 
 ```mermaid
 flowchart LR
   IN["🎬 audio / video"] --> PRE["preprocess<br/>16kHz mono + keyframes"]
-  PRE --> LLM["multimodal LLM<br/>diarize · transcribe · tone<br/><i>(per chunk)</i>"]
-  PRE --> ASR["ASR<br/>word-level timestamps<br/><i>(whole file)</i>"]
-  LLM --> AL["align<br/>edit-distance fuse"]
+  PRE --> LLM["multimodal LLM<br/>words · speakers · tone<br/><i>(chunked, concurrent)</i>"]
+  PRE --> ASR["ASR<br/>word-level clock<br/><i>(whole file)</i>"]
+  LLM --> AL["alignment<br/>one edit-distance pass"]
   ASR --> AL
-  AL --> GF["gap-fill<br/>recover dropped speech"]
-  GF --> CON["consistency<br/>stable speakers"]
-  CON --> ID["identify names<br/><i>(optional, level 3)</i>"]
-  ID --> FIN["finalize →<br/>SRT · MD · JSON"]
+  AL --> POST["gap-fill · mixed-voice splits<br/>speaker resolution"]
+  POST --> ID["name verification<br/><i>(two models + evidence checks)</i>"]
+  ID --> OUT["md · srt · html · txt · json"]
 ```
 
-**Measured** on a hand-checked 32-minute talk (founder presentation + audience Q&A): **≈8% word
-error rate** and **~99% word-level speaker attribution**, with turn boundaries riding AssemblyAI's
-word timing (first cue at `00:00:00,160`, exactly matching ground truth). Full methodology, runs,
-and an independent re-score live in [`docs/`](#receipts--how-this-repo-was-built) and the article.
+The fuse is a [Needleman–Wunsch](https://en.wikipedia.org/wiki/Needleman%E2%80%93Wunsch_algorithm)
+alignment over the two word streams — the LLM's text inherits the ASR's clock. Around that core,
+the seams that actually determine day-to-day quality:
 
-## What's new in `offmute-v2@fable`
+- **Names shown are names verified.** Two different reasoner models read the full transcript and
+  name the speakers independently. They must agree — or produce an evidence quote that actually
+  appears in the transcript. A stated self-introduction outranks both; an unresolvable
+  disagreement stays an honest `Speaker A` rather than becoming a confident guess. One person
+  can never be two voices.
+- **Conversation partners never merge.** ASR diarizers over-split one voice into two clusters;
+  naive fixes merge them back by label — and fuse two *real people* when the LLM mislabels.
+  offmute-v2 checks the turn-taking pattern: clusters that alternate like a conversation are
+  different humans, whatever the labels say.
+- **Mega-segments get split at voice boundaries.** When the LLM folds someone's interjection
+  into another speaker's turn, word-level timing exposes the foreign voice and the segment is
+  split at the exact word.
+- **Chunk seams never double-print.** Segments are ownership-partitioned across chunk overlaps,
+  and boundary-spanning duplicates are trimmed word-by-word.
+- **Nothing silently goes stale.** Every stage caches to disk, keyed on the input file *and* the
+  config — change the model and the cache invalidates itself. Re-run for a new format and it's
+  ~2 seconds and $0.00. Kill it mid-run and it resumes where it stopped.
 
-The fable line is the daily-driver evolution of the primary build — same verified
-architecture, materially better to live with:
+Measured on a hand-checked 32-minute talk with audience Q&A: **≈8% WER, ~99% word-level speaker
+attribution, first cue within 40ms of reference.** Receipts, methodology, and an independent
+re-score live in [`docs/`](docs/) and the [write-up](https://southbridge.ai/blog/offmute-v2-glm-vs-opus).
 
-- **Daemon mode** — `offmute-v2 watch ~/Recordings` transcribes media as it lands in a
-  folder. Waits for files to finish copying, never reprocesses finished work across
-  restarts, resumes killed jobs from cache, notifies when each transcript is ready.
-- **Costs you can see** — a predicted cost line _before_ any paid call, an itemized
-  receipt after, and lifetime accounting in `~/.offmute` (`offmute-v2 stats`).
-- **Names shown are names verified** — level 3 is now the default: display names come
-  only from the identify pass, where two different reasoner models name the speakers
-  independently over the full transcript; disagreements are settled by evidence quotes
-  verified against the transcript, and a self-introduction tripwire ("I'm X") outranks
-  both. Transcription-label name guesses are demoted to hints (they once bound names to
-  the wrong voices on a two-person call — silently). Names are never invented under
-  conflict. `offmute-v2 rename out.json "Speaker B=Ang Li"` retcons a name without
-  reprocessing.
-- **Sturdier diarization** — ASR voice clusters that alternate like conversation
-  partners are never merged into one "speaker" (the failure that used to fold a
-  teammate's replies into the presenter), and mixed-voice mega-segments are split at
-  word-level cluster boundaries.
-- **Better output** — merged same-speaker paragraphs by default (`--md-style turns` for
-  per-turn blocks), tone tags only when the delivery actually stands out, plain-`txt`
-  and self-contained `html` formats, and `--summary` (TL;DR / decisions / action items).
-- **More providers** — ElevenLabs Scribe v2 as an alternate clock
-  (`--timestamped elevenlabs`); reasoners from DeepSeek, Gemini, GLM (z.ai), Kimi,
-  OpenAI, and Anthropic. `offmute-v2 models` shows what your keys unlock;
-  `offmute-v2 doctor` health-checks ffmpeg, keys, and live API reachability.
+## Daemon mode
 
-## Features
-
-- 🎯 **Timestamp-correct** — word-level timing from ASR, fused onto LLM text by alignment.
-- 🎭 **Diarization + tone** — separates speakers through interruptions; annotates `(laughing)`,
-  `(hesitant)`, `(confident)`, …
-- 🧑‍🤝‍🧑 **Three levels of speaker labelling** — separation → stable `Speaker A/B` → real names
-  inferred from context (`--level 3`).
-- 🎬 **Video-aware** — samples keyframes for visual context (who's on screen, demos, slides).
-- ⚡ **Chunked + concurrent** — long files are split with overlap and stitched back with
-  **ownership-partition** dedup (no double-printed sentences at chunk seams).
-- ♻️ **Resumable & stoppable** — every stage caches to disk (in the **OS temp dir** by default;
-  the path is printed each run, and `-i <dir>` keeps it wherever you like). Re-runs skip finished
-  work, Ctrl-C leaves partials. The cache is keyed on the input **and** the config, so changing
-  `--model` never serves you a stale transcript.
-- 🔀 **Pluggable providers** — Gemini for the LLM; AssemblyAI _or_ Groq Whisper for timing.
-- 🌐 **Runs in the browser** — a pure, node-free core + `fetch` providers + ffmpeg.wasm.
-- 🔎 **Fully inspectable** — every LLM prompt+response is logged to `llm-calls.jsonl`; all
-  intermediates are plain JSON.
-
-## Usage
-
-### CLI
+Point it at the folder your recorder drops files into, and stop thinking about it:
 
 ```bash
-npx offmute-v2 <input> [options]
+offmute-v2 watch ~/Recordings --summary
 ```
 
-| Option                      | Default                  | Description                                                                            |
-| --------------------------- | ------------------------ | -------------------------------------------------------------------------------------- |
-| `-o, --output <dir>`        | _next to input_          | where to write the transcript(s); default is the input file's own folder               |
-| `--instructions <text>`     | –                        | guide diarization / labelling, e.g. `"host is Alice; group callers as 'Caller'"`       |
-| `--model <name>`            | `gemini-3.1-pro-preview` | multimodal LLM; use `gemini-3.5-flash` / `gemini-flash-latest` for faster/cheaper runs |
-| `--level <1\|2\|3>`         | `3`                      | 1 = separation · 2 = stable anon labels · 3 = **verified** names (default)             |
-| `--speakers <names>`        | –                        | known speaker names, comma-separated (implies `--level 3`)                             |
-| `--identify <mode>`         | `dual`                   | speaker naming: `dual` (two reasoners + adjudication) · `single`                       |
-| `--timestamped <p>`         | `assemblyai`             | timing provider: `assemblyai` · `elevenlabs` · `whisper-groq` · `none`                 |
-| `--reasoner <name>`         | `deepseek-chat`          | text model for identify/summary (any of `offmute-v2 models`' reasoner pool)            |
-| `--formats <list>`          | `md`                     | which outputs to write (`srt`, `md`, `txt`, `html`, `json`)                            |
-| `--md-style <style>`        | `merged`                 | markdown layout: merged same-speaker paragraphs · `turns`                              |
-| `--summary`                 | off                      | also write `<name>.summary.md` (TL;DR, decisions, action items)                        |
-| `--chunk-seconds <n>`       | `600`                    | chunk length · `--overlap-seconds` (default `60`)                                      |
-| `--passes <list>`           | all                      | run/resume a subset of stages                                                          |
-| `--force`                   | –                        | ignore caches and recompute                                                            |
-| `--only-chunk <n>`          | –                        | process a single chunk (debugging)                                                     |
-| `-i, --intermediates <dir>` | auto                     | cache dir (auto-derived per input)                                                     |
-| `--no-notify`               | –                        | skip the OS notification after long runs                                               |
+- waits for files to finish copying before starting (size-stability check)
+- never reprocesses a finished file, across restarts — killed jobs resume from cache
+- OS notification when each transcript lands
+- `--jobs N` to run several at once, `--no-backlog` to skip what's already there
+
+## Costs you can see
+
+An honest tool tells you what it's about to spend:
+
+- **estimate before any paid call** — duration-based, per provider, printed up front
+- **itemized receipt after** — real token counts, per model, embedded in the JSON metadata too
+- **lifetime accounting** — `offmute-v2 stats` shows hours processed, characters produced, and
+  cost by model, accumulated in `~/.offmute`
+
+Typical numbers: a 30-minute meeting on the default (best) model runs ≈ **$0.30–0.45**;
+`--model gemini-3.5-flash` cuts that ~4× with quality that holds up remarkably well.
+
+## Fix a name in two seconds
+
+The models only have the audio — if nobody says their own name, you'll get an honest
+`Speaker A`. Fixing it doesn't cost a re-run:
 
 ```bash
-npx offmute-v2 meeting.mp4 --level 3                       # name the speakers
-npx offmute-v2 meeting.mp4 --summary --formats md,html     # summary + shareable page
-npx offmute-v2 talk.mov   --timestamped whisper-groq       # free/fast timing, no AssemblyAI
-npx offmute-v2 meeting.mp4 --passes align,consistency,finalize   # resume from cache
+offmute-v2 rename meeting.mp4 "Speaker A=Priya" "Speaker B=Jay"
 ```
 
-### Subcommands
+It finds the run's cache, applies the names, regenerates the outputs, and remembers the fix for
+future re-runs. Or tell it who was in the room up front: `--speakers "Priya,Jay"` — if one known
+name is left over and one voice unnamed, they bind by elimination.
+
+## CLI reference
 
 ```bash
-offmute-v2 watch ~/Recordings --level 3 --summary   # daemon: transcribe as files land
-offmute-v2 models                                   # model matrix + what your keys unlock
-offmute-v2 doctor                                   # ffmpeg + key + API health check
-offmute-v2 stats                                    # lifetime hours / characters / cost
-offmute-v2 rename out.json "Speaker B=Ang Li"       # retcon names without reprocessing
+offmute-v2 <input> [options]      # transcribe (default command)
 ```
 
-Every run prints a cost estimate before spending and an itemized receipt after:
+| option | default | |
+| ------ | ------- | --- |
+| `-o, --output <dir>` | next to input | where transcripts land |
+| `--formats <list>` | `md` | any of `md,srt,txt,html,json` |
+| `--summary` | off | also write TL;DR / decisions / action items |
+| `--instructions <text>` | – | guide the ear: *"the host is Alice; spell it Xiao, not Shao"* |
+| `--speakers <names>` | – | who was in the room (helps naming; comma-separated) |
+| `--model <name>` | `gemini-3.1-pro-preview` | `gemini-3.5-flash` for ~4× cheaper/faster |
+| `--timestamped <p>` | `assemblyai` | `elevenlabs` (Scribe v2) · `whisper-groq` (free) · `none` |
+| `--reasoner <name>` | `deepseek-chat` | naming/summary model — DeepSeek, Gemini, GLM, Kimi, GPT, Claude |
+| `--level <1\|2\|3>` | `3` | 1 separation · 2 anonymous-consistent · 3 **verified names** |
+| `--identify <mode>` | `dual` | two reasoners + adjudication · `single` |
+| `--md-style <s>` | `merged` | merged paragraphs · `turns` for one block per turn |
+| `--chunk-seconds` / `--overlap-seconds` | `600` / `60` | chunking |
+| `--force` | – | ignore caches and recompute |
+| `-i <dir>` | OS temp, per input | cache location (printed each run) |
 
-```text
-estimated cost ~$0.46  [gemini-3.1-pro-preview: 6 chunks + describe ≈ $0.34 · assemblyai: 47min ≈ $0.12 · …]
-...
-receipt: 8 LLM calls · 214k in / 12k out · ~$0.43 · 6m12s
+```bash
+offmute-v2 watch <dir>       # daemon: transcribe files as they appear
+offmute-v2 rename <file> "Old=New"   # retcon speaker names from the run cache
+offmute-v2 models            # what each role can use + what your keys unlock
+offmute-v2 doctor            # ffmpeg + keys + live API health check
+offmute-v2 stats             # lifetime hours, characters, cost by model
 ```
 
-### Library
-
-The primary line takes a single options object. Only `input` is required — `outputDir` defaults to
-the input file's folder and `formats` defaults to `["md"]`:
+## Library
 
 ```ts
 import { transcribe } from "offmute-v2";
 
 const { segments, speakers, metadata } = await transcribe({
   input: "meeting.mp4",
-  // outputDir: "./out",          // optional — defaults next to the input
-  model: "gemini-flash-latest",
-  level: 3,
+  formats: ["md", "json"],
   instructions: "Three-person panel; label by name.",
-  formats: ["srt", "md", "json"], // optional — defaults to ["md"]
-  apiKeys: { gemini: "...", assemblyai: "..." }, // optional; falls back to env
+  apiKeys: { gemini: "...", assemblyai: "..." }, // optional — falls back to env
 });
 
-console.log(segments[0]); // { start, end, speaker, text, tone, timingSource, ... }
+console.log(segments[0]);
+// { start: 0.16, end: 4.2, speaker: "Speaker A", speakerName: "Hanjun Kim",
+//   text: "...", tone: ["laughing"], confidence: 0.97, words: [...] }
+console.log(metadata.cost); // { estimatedUsd, actualUsd, lines, ... }
 ```
 
-Individual stages (`alignSegments`, `assignGlobalSpeakers`, `finalizeSegments`, formatters, …) are
-exported too, so you can build your own pipeline.
+Every pipeline stage (`alignSegments`, `assignGlobalSpeakers`, `identifySpeakersV2`, the
+formatters) is exported individually — bring your own pipeline if you like. A browser build of
+the pure fusion core ships as `offmute-v2/browser` (fetch providers + optional ffmpeg.wasm).
 
-### Browser
+## What can go wrong (honestly)
 
-The fusion core (align / consistency / identify / finalize / format) is pure TypeScript with **zero
-node-only imports**, so it bundles tiny and runs in the browser via `offmute-v2/browser` — using
-`fetch`-based providers and `ffmpeg.wasm` for in-browser audio extraction. See
-[`docs/`](#receipts--how-this-repo-was-built) / the browser example for the integration seam.
-
-## How it works
-
-A multi-stage pipeline where each stage persists a JSON intermediate (so it's resumable and
-debuggable):
-
-1. **preprocess** — ffmpeg → compact mono 16 kHz **mp3** + scene-aware keyframes (a 9.6 GB `.mov`
-   becomes a few MB of audio in seconds — transparent for speech, but a fraction of lossless size).
-2. **describe** — a quick multimodal pass builds a meeting summary + speaker roster to prime
-   transcription.
-3. **llm-transcribe** — each chunk goes to the LLM for verbatim text, diarization, and tone. Output
-   is plain text with coarse `mm:ss` markers, parsed leniently (truncated text degrades gracefully
-   where truncated JSON would be unrecoverable — a lesson from [ipgu](#credits)).
-4. **timestamped** — the whole file goes to ASR for word-level timing + a speaker backbone.
-5. **align** — the heart: the LLM's token stream is aligned against the ASR word stream with a
-   Needleman–Wunsch edit-distance DP, transferring accurate word times onto the richer LLM text.
-6. **gap-fill** — anywhere ASR heard speech that no LLM segment covers, an ASR fallback is inserted
-   so nothing is dropped.
-7. **consistency** — the ASR voice clusters act as a global backbone, merging the LLM's per-chunk
-   labels into stable speakers (and fixing ASR over-splits).
-8. **identify** _(level 3)_ — a reasoning model maps `Speaker A` → real names using context + a
-   voice-cluster hint.
-9. **finalize** — overlap fixes, clamping, readable subtitle-sized blocks, and SRT/MD/JSON.
-
-> [!NOTE]
-> The hard parts of this problem are **chunk overlap** and **alignment**. offmute-v2 partitions
-> overlap by _ownership_ (each word is emitted by exactly one chunk) so sentences are never
-> double-printed at seams, and aligns the _whole_ chunk in one DP pass so common words like "it"
-> can't mis-match to a later occurrence.
-
-## Built twice, in the open: GLM vs Opus
-
-This repo is also an **agent-vs-agent experiment**. offmute-v2 was built **twice, from one identical
-prompt**, by two different models running in **Claude Code** — a head-to-head on a hard,
-AI-resistant build (fusing the ideas of [offmute], [meeting-diary], and [ipgu] into one
-timestamp-accurate diarizer):
-
-| Branch                        | Built by                     | npm tag             | What it is                                     |
-| ----------------------------- | ---------------------------- | ------------------- | ---------------------------------------------- |
-| [`master`](../../tree/master) | GLM line + post-launch fixes | `offmute-v2@latest` | the daily-driven, hardened build (this README) |
-| [`glm`](../../tree/glm)       | **GLM-5.2**                  | `offmute-v2@glm`    | the frozen GLM experiment build                |
-| [`opus`](../../tree/opus)     | **Claude Opus 4.8**          | `offmute-v2@opus`   | the frozen Opus experiment build               |
-
-```bash
-npx offmute-v2@glm   meeting.mp4   # the GLM build, exactly as submitted
-npx offmute-v2@opus  meeting.mp4   # the Opus build, exactly as submitted
-```
-
-The `glm` and `opus` branches have **independent histories** — each is the full, unedited commit
-trail of that model's build, every review round, and every fix. The headline finding (spoiler):
-once a chunk-overlap dedup bug is accounted for, the two are a near dead-heat on accuracy, and the
-differences are in code conventions, error DX, and packaging. The full analysis is in the article.
-
-## Receipts & how this repo was built
-
-Everything is open for inspection:
-
-- **Per-branch review trails** (on [`glm`](../../tree/glm/docs) / [`opus`](../../tree/opus/docs)):
-  `docs/spec.md`, `docs/review-1/`, `docs/review-2/` (run-throughs, code reads, an independent
-  review, and each model's diagnosed fixes), and the append-only `intermediates/process_log_*.md`
-  dev journals.
-- **Releasing & npm tags:** [`RELEASING.md`](RELEASING.md) — published via GitHub Actions **npm
-  Trusted Publishing (OIDC)**, no tokens, with provenance.
-
-## Diarization levels
-
-1. **Separation** — who speaks when.
-2. **Anonymous-consistent** — `Speaker A/B`, stable across the whole file _(default)_.
-3. **Identification** — real names inferred from context (needs `DEEPSEEK_API_KEY`, or point
-   `--reasoner` at another provider). Use `--instructions` to steer (e.g. _"everyone except the
-   host is 'Audience'"_).
+- **Two similar voices, nobody says a name** → you get correct turn-taking with `Speaker A/B`
+  labels, not a confident wrong guess. That's by design; `rename` or `--speakers` closes the gap.
+- **Heard names get spelled by ear** — "Hanjun" may render as "Hanjin" between runs. The
+  recording's filename and your `--instructions` both feed the namer; `rename` fixes stragglers.
+- **Network blips** → every upload retries with backoff for ~90s; if a run still dies, re-running
+  resumes from cache and re-pays nothing that finished.
+- **It costs money** — roughly a dollar an hour of audio on the best models, a quarter of that on
+  flash. The estimate prints before anything is spent.
 
 ## Requirements
 
-- **Node ≥ 20** and **`ffmpeg`/`ffprobe`** on `PATH` (CLI / library). The browser build uses
-  ffmpeg.wasm instead.
-- **API keys** (from env or the `apiKeys` option):
-  - `GEMINI_API_KEY` (or `GOOGLE_API_KEY`) — required.
-  - `ASSEMBLYAI_API_KEY` — required for timing (or use `--timestamped whisper-groq` + `GROQ_API_KEY`).
-  - `DEEPSEEK_API_KEY` — optional, for `--level 3` name identification.
+- **Node ≥ 20** and **ffmpeg** in PATH (`brew install ffmpeg` / `apt install ffmpeg`)
+- `GEMINI_API_KEY` (or `GOOGLE_API_KEY`) — required, the ears
+- One clock, strongly recommended: `ASSEMBLYAI_API_KEY` (default) · `ELEVENLABS_API_KEY`
+  (Scribe v2 — the sharpest diarization we've tested) · `GROQ_API_KEY` (free whisper timing)
+- Nice-to-have: `DEEPSEEK_API_KEY` — makes speaker naming cost ~$0.003 a run
+
+Keys can also be injected via the library API instead of the environment. Run
+`offmute-v2 doctor` to see where you stand.
+
+## The story
+
+This repo is an experiment receipt as much as a tool. The same brief — fuse
+[offmute](https://github.com/southbridgeai/offmute)'s LLM diarization,
+[meeting-diary](https://github.com/hrishioa/meeting-diary)'s ASR timing, and
+[ipgu](https://github.com/hrishioa/ipgu)'s alignment discipline — was given independently to two
+frontier models working autonomously. Both built the whole thing; both landed on the same
+architecture; the differences live in the seams. Their unedited process logs, self-reviews, and
+my manual reviews are preserved on the [`glm`](../../tree/glm) and [`opus`](../../tree/opus)
+branches, published as `offmute-v2@glm` and `offmute-v2@opus`. A third line — this one,
+`offmute-v2@fable` — took everything both learned and kept going.
+
+Full write-up: [**"The frontier is open-source today"**](https://southbridge.ai/blog/offmute-v2-glm-vs-opus).
 
 ## Development
 
 ```bash
-git clone https://github.com/SouthBridgeAI/offmute-v2.git
-cd offmute-v2                 # master = the primary build
-npm ci
-npm run typecheck && npm run lint && npm test
-npm run build                # tsup → dist/ (node + browser bundles)
-npm run dev -- meeting.mp4   # run from source
+git clone https://github.com/SouthBridgeAI/offmute-v2 && cd offmute-v2
+npm install
+npm test          # vitest
+npm run typecheck # strict tsc
+npm run dev -- path/to/file.mp4
 ```
 
-To compare against the experiment builds, check out the [`glm`](../../tree/glm) or
-[`opus`](../../tree/opus) branch (the Opus build uses Bun: `bun install && bun run build`).
+Releases ship via npm Trusted Publishing — see [RELEASING.md](RELEASING.md) for the
+branch/dist-tag map.
 
-## Credits
+---
 
-Built on three predecessors, with their hard-won lessons carried forward:
+<div align="center">
 
-- **[offmute]** — multimodal describe→transcribe, diarization, tone.
-- **[meeting-diary]** — ASR word-timestamps + speaker diarization.
-- **[ipgu]** — chunk/merge discipline and structured extraction from LLM output.
+Built by [Southbridge](https://southbridge.ai) · created by [Hrishi Olickel](https://twitter.com/hrishioa)
 
-Created by [Southbridge](https://southbridge.ai). Thanks to the model teams — including
-[z.ai](https://z.ai) for GLM-5.2 and Anthropic for Claude Opus.
+If offmute-v2 saved you an afternoon of "who said that?", **[a star](https://github.com/SouthBridgeAI/offmute-v2)** keeps the frog listening. 🐸
 
-**License:** Apache-2.0.
-
-[offmute]: https://github.com/southbridgeai/offmute
-[meeting-diary]: https://github.com/southbridgeai/meeting-diary
-[ipgu]: https://github.com/hrishioa/ipgu
+</div>
