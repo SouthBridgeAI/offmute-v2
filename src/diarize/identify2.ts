@@ -319,7 +319,9 @@ export async function identifySpeakersV2(
   // Distinguish "verified: no names in evidence" from "the passes never ran".
   // A transient outage must not masquerade as a considered decision.
   const passFailed = (r: IdentifyResult | undefined) =>
-    !!r && r.speakers.length === 0 && /fetch failed|HTTP \d|network|ENOTFOUND|JSON parse|no response/i.test(r.reasoning);
+    !!r &&
+    r.speakers.length === 0 &&
+    /fetch failed|HTTP \d|network|ENOTFOUND|JSON parse|no response/i.test(r.reasoning);
   if (passFailed(resA) && (!wantB || passFailed(resB))) {
     logger.warn(
       `identify: ALL passes failed (${resA.reasoning.slice(0, 80)}) — speakers left as generic labels. ` +
@@ -346,7 +348,9 @@ export async function identifySpeakersV2(
   const decisions: IdentifyV2Decision[] = [];
   // An intro name is "corroborated" when the roster or known speakers mention it —
   // that makes it safe to adopt even when both model passes missed it.
-  const corroborationText = norm(`${opts.roster ?? ""} ${(opts.knownSpeakers ?? []).join(" ")}`);
+  const corroborationText = norm(
+    `${opts.roster ?? ""} ${(opts.knownSpeakers ?? []).join(" ")}`,
+  );
   const isCorroborated = (name: string | undefined): boolean => {
     if (!name) return false;
     const n = norm(name);
@@ -416,7 +420,9 @@ export async function identifySpeakersV2(
       d.outcome = "elimination";
       d.note = `only remaining known speaker`;
       nameMap[d.speakerId] = d.finalName;
-      logger.info(`identify: "${d.speakerId}" → ${d.finalName} (by elimination from --speakers)`);
+      logger.info(
+        `identify: "${d.speakerId}" → ${d.finalName} (by elimination from --speakers)`,
+      );
     }
   }
 

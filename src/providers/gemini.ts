@@ -43,6 +43,17 @@ export interface GeminiResult {
   error?: string;
 }
 
+// The @google/genai SDK warns "Both GOOGLE_API_KEY and GEMINI_API_KEY are set..." on
+// every client it builds internally — even though we always pass the key explicitly.
+// Filter that exact line (and nothing else); having both env vars is our supported,
+// documented setup.
+const SDK_KEY_WARNING = "Both GOOGLE_API_KEY and GEMINI_API_KEY are set";
+const originalWarn = console.warn.bind(console);
+console.warn = (...args: unknown[]) => {
+  if (typeof args[0] === "string" && args[0].startsWith(SDK_KEY_WARNING)) return;
+  originalWarn(...args);
+};
+
 const MIME_BY_EXT: Record<string, string> = {
   ".flac": "audio/flac",
   ".mp3": "audio/mp3",

@@ -40,12 +40,20 @@ export class OpenAICompatClient {
     private providerName = "openai-compat",
   ) {}
 
-  static fromProvider(provider: string, apiKey: string, defaultModel: string): OpenAICompatClient {
+  static fromProvider(
+    provider: string,
+    apiKey: string,
+    defaultModel: string,
+  ): OpenAICompatClient {
     const base = PROVIDER_BASE[provider] ?? provider;
     return new OpenAICompatClient(base, apiKey, defaultModel, provider);
   }
 
-  async chat(model: string | undefined, messages: ChatMessage[], opts: ChatOptions = {}): Promise<ChatResult> {
+  async chat(
+    model: string | undefined,
+    messages: ChatMessage[],
+    opts: ChatOptions = {},
+  ): Promise<ChatResult> {
     const m = model ?? this.defaultModel;
     // 5 attempts with exponential backoff (~60s envelope) — text calls are cheap and
     // transient network outages here outlast a couple of quick retries.
@@ -112,7 +120,10 @@ export class OpenAICompatClient {
           delete body.response_format;
           continue;
         }
-        if (body.reasoning_effort && /reasoning_effort|reasoning effort/i.test(lastError)) {
+        if (
+          body.reasoning_effort &&
+          /reasoning_effort|reasoning effort/i.test(lastError)
+        ) {
           delete body.reasoning_effort;
           continue;
         }
@@ -134,7 +145,11 @@ export class OpenAICompatClient {
     return { text: "", usage: { inputTokens: 0, outputTokens: 0 }, error: lastError };
   }
 
-  async chatJson<T = unknown>(model: string | undefined, messages: ChatMessage[], opts: ChatOptions = {}): Promise<{ data: T | null; raw: string; error?: string }> {
+  async chatJson<T = unknown>(
+    model: string | undefined,
+    messages: ChatMessage[],
+    opts: ChatOptions = {},
+  ): Promise<{ data: T | null; raw: string; error?: string }> {
     // A malformed/truncated JSON response is a per-sample failure, not a hard error —
     // one fresh resample usually fixes it (network retries live inside chat()).
     let lastRaw = "";

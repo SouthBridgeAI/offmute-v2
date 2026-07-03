@@ -124,7 +124,13 @@ export async function identifySpeakers(
     [
       {
         role: "user",
-        content: identifyPrompt(excerpt, roster, knownSpeakers, nameHints, sourceFileName),
+        content: identifyPrompt(
+          excerpt,
+          roster,
+          knownSpeakers,
+          nameHints,
+          sourceFileName,
+        ),
       },
     ],
     // 8000 tokens: verbose models quote long verbatim evidence, and Gemini's compat

@@ -33,7 +33,9 @@ describe("planChunks", () => {
     expect(chunks.length).toBeGreaterThan(1);
     expect(chunks[0]!.start).toBe(0);
     expect(chunks[0]!.trustedStart).toBe(0);
-    expect(chunks[1]!.trustedStart).toBe(chunks[1]!.start + chunks[1]!.overlapWithPrevious);
+    expect(chunks[1]!.trustedStart).toBe(
+      chunks[1]!.start + chunks[1]!.overlapWithPrevious,
+    );
     // chunks should cover the full duration
     const last = chunks[chunks.length - 1]!;
     expect(last.end).toBe(1500);

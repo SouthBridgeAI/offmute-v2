@@ -9,7 +9,7 @@
 import { Command } from "commander";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { dirname, join } from "node:path";
+import { dirname, join, basename, resolve } from "node:path";
 import { transcribe } from "./core/pipeline.js";
 import type { Pass } from "./core/config.js";
 import { runModels } from "./commands/models.js";
@@ -18,7 +18,17 @@ import { runStats } from "./commands/stats.js";
 import { runRename } from "./commands/rename.js";
 import { runWatch } from "./commands/watch.js";
 import { notify } from "./utils/notify.js";
-import { basename } from "node:path";
+import { formatDuration } from "./utils/time.js";
+import {
+  configureUi,
+  uiActive,
+  finishUi,
+  banner,
+  outputsBlock,
+  tipsBlock,
+  errorBlock,
+} from "./utils/ui.js";
+import type { TranscriptResult } from "./core/types.js";
 
 let packageVersion = "0.0.0";
 try {
@@ -65,11 +75,62 @@ interface TranscribeCliOpts {
   notify: boolean;
 }
 
+/** Contextual next-step suggestions based on how THIS run actually went. */
+function buildTips(result: TranscriptResult, opts: TranscribeCliOpts, input: string): string[] {
+  const tips: string[] = [];
+  const jsonPath = join(
+    opts.output ?? ".",
+    basename(input).replace(/\.[^.]+$/, "") + ".json",
+  );
+  const genericSpeakers = result.speakers.filter(
+    (sp) => !sp.name || /^Speaker [A-Z]$/.test(sp.name),
+  );
+  if (genericSpeakers.length > 0 && !opts.speakers) {
+    tips.push(
+      `${genericSpeakers.length} speaker(s) stayed generic — tell me who was there next time (--speakers "Alice,Bob"), or retcon now: offmute-v2 rename "${jsonPath}" "${genericSpeakers[0]!.id}=Name" (needs --formats json)`,
+    );
+  }
+  if (!opts.model && result.metadata.duration > 1500) {
+    tips.push(
+      "long file on the pro model — try --model gemini-3.5-flash for ~4× cheaper and faster (quality holds up well)",
+    );
+  }
+  if (!opts.formats && !opts.summary) {
+    tips.push(
+      "want a shareable page and action items? --formats md,html --summary",
+    );
+  }
+  if (!opts.instructions) {
+    tips.push(
+      'nudge the ear with --instructions, e.g. "the host is Alice; spell it Xiao, not Shao"',
+    );
+  }
+  return tips.slice(0, 2);
+}
+
+/** A friendlier hint for the most common failure shapes. */
+function errorHint(msg: string): string | undefined {
+  if (/Invalid data found|ffprobe exited/.test(msg))
+    return "that file doesn't look like readable media — is it actually audio/video?";
+  if (/not found in PATH|ffmpeg\/ffprobe/.test(msg))
+    return "install ffmpeg first: brew install ffmpeg (macOS) or apt install ffmpeg";
+  if (/API_KEY/.test(msg)) return "run `offmute-v2 doctor` to see which keys are set and working";
+  if (/fetch failed|ENOTFOUND|ECONNRESET/.test(msg))
+    return "network hiccup — just re-run; everything finished so far is cached";
+  if (/Input file not found/.test(msg)) return "check the path (tab-completion is your friend)";
+  return undefined;
+}
+
 async function runTranscribe(input: string, opts: TranscribeCliOpts): Promise<void> {
   const passes = opts.passes?.split(",") as Pass[] | undefined;
   let level = parseInt(opts.level, 10) as 1 | 2 | 3;
   // Providing known speakers means the user wants names — implies the identify pass.
   if (opts.speakers && level < 3) level = 3;
+
+  // Pretty renderer: TTY runs only; debug logs and piped output stay plain.
+  const pretty = process.stdout.isTTY === true && opts.progress && opts.logLevel !== "debug";
+  configureUi({ enabled: pretty });
+  banner(packageVersion, basename(input));
 
   const t0 = Date.now();
   const result = await transcribe({
@@ -105,7 +166,24 @@ async function runTranscribe(input: string, opts: TranscribeCliOpts): Promise<vo
     llmLog: opts.llmLog,
     logLevel: opts.logLevel as "debug" | "info" | "warn" | "error",
   });
-  console.log(`Done. ${result.segments.length} segments.`);
+  if (uiActive()) {
+    finishUi();
+    const base = basename(input).replace(/\.[^.]+$/, "");
+    const outDir = resolve(opts.output ?? (dirname(resolve(input)) || "."));
+    const formats = opts.formats ? opts.formats.split(",") : ["md"];
+    const files = formats.map((f) => join(outDir, `${base}.${f.trim()}`));
+    if (opts.summary) files.push(join(outDir, `${base}.summary.md`));
+    const cost = result.metadata.cost ? ` · ~$${result.metadata.cost.actualUsd.toFixed(2)}` : "";
+    const wall = result.metadata.wallMs ? ` · ${formatDuration(Math.round(result.metadata.wallMs / 1000))}` : "";
+    outputsBlock(
+      files,
+      `${result.segments.length} segments · ${result.speakers.length} speakers · ${formatDuration(Math.round(result.metadata.duration))} of audio${cost}${wall}`,
+    );
+    tipsBlock(buildTips(result, opts, input));
+    process.stdout.write("\n");
+  } else {
+    console.log(`Done. ${result.segments.length} segments.`);
+  }
   // A run long enough to walk away from earns a ping when it's back.
   if (opts.notify && Date.now() - t0 > 120_000) {
     const cost = result.metadata.cost
@@ -183,9 +261,16 @@ addTranscribeOptions(
     await runTranscribe(input, opts);
   } catch (err) {
     // Print a clean, single-line message for expected errors (missing keys/ffmpeg/input,
-    // bad model, network). The full stack is only shown in debug mode (or OFFMUTE_DEBUG).
+    // bad model, network) plus a targeted hint. Full stack only in debug/OFFMUTE_DEBUG.
     const msg = err instanceof Error ? err.message : String(err);
-    console.error(`\n✗ ${msg}`);
+    if (uiActive()) {
+      errorBlock(msg, errorHint(msg));
+      finishUi();
+    } else {
+      console.error(`\n✗ ${msg}`);
+      const hint = errorHint(msg);
+      if (hint) console.error(`  ${hint}`);
+    }
     if (opts.logLevel === "debug" || process.env.OFFMUTE_DEBUG) {
       console.error(err instanceof Error ? err.stack : err);
     }

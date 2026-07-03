@@ -50,11 +50,16 @@ export async function describeMeeting(
   instructions?: string,
   audioSampleCount = 1,
 ): Promise<MeetingDescription> {
-  const res = await client.generate(model, descriptionPrompt(fileName, instructions, audioSampleCount), files, {
-    temperature: 0.2,
-    maxRetries: 3,
-    logKind: "describe",
-  });
+  const res = await client.generate(
+    model,
+    descriptionPrompt(fileName, instructions, audioSampleCount),
+    files,
+    {
+      temperature: 0.2,
+      maxRetries: 3,
+      logKind: "describe",
+    },
+  );
   const text = res.text || "";
   // Split into DESCRIPTION / ROSTER by the "---" separator.
   const parts = text.split(/\n---\n|\n\s*---\s*\n/);

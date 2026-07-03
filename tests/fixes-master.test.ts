@@ -1,6 +1,11 @@
 import { describe, it, expect } from "vitest";
 import { tmpdir } from "node:os";
-import { configSignature, deriveIntermediatesDir, resolveOptions, DEFAULT_TRANSCRIBE_MODEL } from "../src/core/config.js";
+import {
+  configSignature,
+  deriveIntermediatesDir,
+  resolveOptions,
+  DEFAULT_TRANSCRIBE_MODEL,
+} from "../src/core/config.js";
 import { resolveThinking, isThinkingConfigError } from "../src/providers/gemini.js";
 import { transcribe } from "../src/core/pipeline.js";
 
@@ -88,7 +93,11 @@ describe("transcribe() option validation (clear errors, not cryptic crashes)", (
     expect(o.formats).toEqual(["md"]);
   });
   it("still honors an explicit outputDir / formats", () => {
-    const o = resolveOptions({ input: "/a/b/meeting.mp4", outputDir: "/out", formats: ["srt", "json"] });
+    const o = resolveOptions({
+      input: "/a/b/meeting.mp4",
+      outputDir: "/out",
+      formats: ["srt", "json"],
+    });
     expect(o.outputDir).toBe("/out");
     expect(o.formats).toEqual(["srt", "json"]);
   });
