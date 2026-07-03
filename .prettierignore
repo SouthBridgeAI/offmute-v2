@@ -1,0 +1,13 @@
+# Build output
+dist/
+
+# Frozen experiment receipts — reviews, process logs, and the original spec are
+# historical artifacts; formatting must not rewrite them.
+docs/spec.md
+docs/comparison-response.md
+docs/review-1/
+docs/review-2/
+intermediates/
+
+# Demo kept as-shipped
+examples/browser/

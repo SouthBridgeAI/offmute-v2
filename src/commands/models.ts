@@ -8,7 +8,11 @@ import {
   DEFAULT_REASONER_MODEL,
   type ApiKeys,
 } from "../core/config.js";
-import { REASONER_PRESETS, resolveReasonerInfo, reasonerKey } from "../providers/reasoner.js";
+import {
+  REASONER_PRESETS,
+  resolveReasonerInfo,
+  reasonerKey,
+} from "../providers/reasoner.js";
 
 const TRANSCRIBE_PRESETS: { model: string; note: string }[] = [
   { model: "gemini-3.1-pro-preview", note: "default — best diarization/tone" },
@@ -19,12 +23,25 @@ const TRANSCRIBE_PRESETS: { model: string; note: string }[] = [
   { model: "gemini-2.5-flash", note: "" },
 ];
 
-const TIMESTAMPED_PRESETS: { id: string; keyName: keyof ApiKeys | null; note: string }[] = [
-  { id: "assemblyai", keyName: "assemblyai", note: "default — word timing + diarization" },
-  { id: "elevenlabs", keyName: "elevenlabs", note: "Scribe v2 — strongest diarization labels" },
-  { id: "whisper-groq", keyName: "groq", note: "free/fast — word timing, NO diarization" },
-  { id: "none", keyName: null, note: "LLM-only (coarse timestamps)" },
-];
+const TIMESTAMPED_PRESETS: { id: string; keyName: keyof ApiKeys | null; note: string }[] =
+  [
+    {
+      id: "assemblyai",
+      keyName: "assemblyai",
+      note: "default — word timing + diarization",
+    },
+    {
+      id: "elevenlabs",
+      keyName: "elevenlabs",
+      note: "Scribe v2 — strongest diarization labels",
+    },
+    {
+      id: "whisper-groq",
+      keyName: "groq",
+      note: "free/fast — word timing, NO diarization",
+    },
+    { id: "none", keyName: null, note: "LLM-only (coarse timestamps)" },
+  ];
 
 const ok = (b: boolean) => (b ? "✓" : "✗ (no key)");
 

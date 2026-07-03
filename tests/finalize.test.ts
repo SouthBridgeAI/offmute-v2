@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { fixOverlaps, clampAndFix, dedupSegments, finalizeSegments } from "../src/finalize/finalize.js";
+import {
+  fixOverlaps,
+  clampAndFix,
+  dedupSegments,
+  finalizeSegments,
+} from "../src/finalize/finalize.js";
 import type { Segment } from "../src/core/types.js";
 import type { AlignedSegment } from "../src/align/aligner.js";
 
@@ -68,7 +73,12 @@ describe("dedupSegments", () => {
 });
 
 describe("finalizeSegments", () => {
-  const a = (start: number, end: number, text: string, speaker = "A"): AlignedSegment => ({
+  const a = (
+    start: number,
+    end: number,
+    text: string,
+    speaker = "A",
+  ): AlignedSegment => ({
     speaker,
     start,
     end,

@@ -35,7 +35,10 @@ export function parseSrt(content: string): ParsedSrtEntry[] {
     const timing = parseSrtTiming(timingLine);
     if (!timing) continue;
 
-    const text = lines.slice(idLine + 2).join("\n").trim();
+    const text = lines
+      .slice(idLine + 2)
+      .join("\n")
+      .trim();
     entries.push({
       id,
       start: timing.start,
@@ -81,7 +84,9 @@ export function formatMarkdown(
       .toString()
       .padStart(2, "0");
     const tone = seg.tone && seg.tone.length > 0 ? ` *(${seg.tone.join(", ")})*` : "";
-    parts.push(`[${mm}:${ss}] **${seg.speakerName || seg.speaker}**${tone}: ${seg.text}\n`);
+    parts.push(
+      `[${mm}:${ss}] **${seg.speakerName || seg.speaker}**${tone}: ${seg.text}\n`,
+    );
   }
   return parts.join("\n");
 }

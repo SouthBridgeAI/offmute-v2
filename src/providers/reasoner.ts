@@ -40,7 +40,12 @@ export function inferProvider(model: string): string {
   if (m.startsWith("glm")) return "zai";
   if (m.startsWith("kimi") || m.startsWith("moonshot")) return "kimi";
   if (m.startsWith("claude")) return "anthropic";
-  if (m.startsWith("gpt") || m.startsWith("o1") || m.startsWith("o3") || m.startsWith("o4"))
+  if (
+    m.startsWith("gpt") ||
+    m.startsWith("o1") ||
+    m.startsWith("o3") ||
+    m.startsWith("o4")
+  )
     return "openai";
   if (m.includes("llama") || m.includes("mixtral")) return "groq";
   return "openai";

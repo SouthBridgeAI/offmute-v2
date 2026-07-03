@@ -138,14 +138,18 @@ export function score(
 export function printScore(s: EvalScore): void {
   console.log("=== EVAL ===");
   console.log(`words: output ${s.outputWords}, reference ${s.referenceWords}`);
-  console.log(`WER: ${s.wer.toFixed(3)} (word accuracy ${(s.wordAccuracy * 100).toFixed(1)}%)`);
+  console.log(
+    `WER: ${s.wer.toFixed(3)} (word accuracy ${(s.wordAccuracy * 100).toFixed(1)}%)`,
+  );
   console.log(
     `reference coverage: ${s.referenceCoverage}/${s.referenceTotal} entries have overlapping output`,
   );
   console.log(
     `boundary timing: ${s.boundariesMatched}/${s.referenceTotal} matched within window | median ${s.boundaryErrorMedian.toFixed(2)}s, p90 ${s.boundaryErrorP90.toFixed(2)}s`,
   );
-  console.log(`speaker accuracy: ${isNaN(s.speakerAccuracy) ? NaN : (s.speakerAccuracy * 100).toFixed(0)}%`);
+  console.log(
+    `speaker accuracy: ${isNaN(s.speakerAccuracy) ? NaN : (s.speakerAccuracy * 100).toFixed(0)}%`,
+  );
   console.log("speaker map (output → reference):");
   for (const [out, ref] of Object.entries(s.speakerMap)) {
     console.log(`  ${out} → ${ref}`);

@@ -52,7 +52,12 @@ describe("alignWords", () => {
 });
 
 describe("alignSegments", () => {
-  const seg = (start: number, end: number, text: string, speaker = "A"): ParsedLlmSegment => ({
+  const seg = (
+    start: number,
+    end: number,
+    text: string,
+    speaker = "A",
+  ): ParsedLlmSegment => ({
     speaker,
     startSec: start,
     endSec: end,
@@ -68,10 +73,7 @@ describe("alignSegments", () => {
   });
 
   it("transfers ASR word times onto LLM segments", () => {
-    const llm = [
-      seg(0, 2, "hello world", "A"),
-      seg(2, 4, "goodbye now", "B"),
-    ];
+    const llm = [seg(0, 2, "hello world", "A"), seg(2, 4, "goodbye now", "B")];
     const asr = [
       word("hello", 0.1, 0.5),
       word("world", 0.6, 1.0),

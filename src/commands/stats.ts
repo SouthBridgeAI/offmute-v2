@@ -16,9 +16,13 @@ export function runStats(): void {
   lines.push(`offmute-v2 lifetime stats  (${statsDir()})`);
   lines.push("");
   lines.push(`  runs            ${s.runs}`);
-  lines.push(`  media processed ${formatDuration(Math.round(s.mediaSeconds))}  (${(s.mediaSeconds / 3600).toFixed(1)}h)`);
+  lines.push(
+    `  media processed ${formatDuration(Math.round(s.mediaSeconds))}  (${(s.mediaSeconds / 3600).toFixed(1)}h)`,
+  );
   lines.push(`  characters out  ${s.characters.toLocaleString()}`);
-  lines.push(`  LLM calls       ${s.llmCalls.toLocaleString()}  (${(s.inputTokens / 1e6).toFixed(1)}M in / ${(s.outputTokens / 1e6).toFixed(1)}M out)`);
+  lines.push(
+    `  LLM calls       ${s.llmCalls.toLocaleString()}  (${(s.inputTokens / 1e6).toFixed(1)}M in / ${(s.outputTokens / 1e6).toFixed(1)}M out)`,
+  );
   lines.push(`  total cost      ~$${s.costUsd.toFixed(2)}`);
   if (s.firstRun) lines.push(`  since           ${s.firstRun.slice(0, 10)}`);
   const models = Object.entries(s.costByModel).sort((a, b) => b[1] - a[1]);

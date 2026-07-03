@@ -54,10 +54,7 @@ async function main() {
   }
 
   writeFileSync(`${outDir}/chunk_000_raw.json`, result.raw);
-  writeFileSync(
-    `${outDir}/chunk_000_parsed.json`,
-    JSON.stringify(result, null, 2),
-  );
+  writeFileSync(`${outDir}/chunk_000_parsed.json`, JSON.stringify(result, null, 2));
   logger_info(`saved to ${outDir}/`);
 }
 

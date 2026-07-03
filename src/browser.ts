@@ -17,7 +17,11 @@
 import { GeminiFetchClient } from "./providers/gemini-fetch.js";
 import { AssemblyAIFetchClient } from "./providers/assemblyai-fetch.js";
 import { OpenAICompatClient } from "./providers/openai-compat.js";
-import { transcriptionPrompt, TRANSCRIPT_SCHEMA, type LlmTranscriptJson } from "./transcribe/prompts.js";
+import {
+  transcriptionPrompt,
+  TRANSCRIPT_SCHEMA,
+  type LlmTranscriptJson,
+} from "./transcribe/prompts.js";
 import { parseLlmSegments } from "./transcribe/llm-transcribe.js";
 import { alignSegments } from "./align/aligner.js";
 import { assignGlobalSpeakers } from "./diarize/consistency.js";
@@ -67,12 +71,16 @@ export interface TranscribeBrowserOptions {
  * files whose audio fits the inline limit (~20MB); for longer, chunk and call the
  * stages directly.
  */
-export async function transcribeBrowser(opts: TranscribeBrowserOptions): Promise<TranscriptResult> {
+export async function transcribeBrowser(
+  opts: TranscribeBrowserOptions,
+): Promise<TranscriptResult> {
   const model = opts.model ?? "gemini-2.5-flash";
   const level = opts.level ?? 2;
 
   // 1. ASR (whole file).
-  const asr = await new AssemblyAIFetchClient(opts.assemblyaiApiKey).transcribe(opts.audio);
+  const asr = await new AssemblyAIFetchClient(opts.assemblyaiApiKey).transcribe(
+    opts.audio,
+  );
 
   // 2. LLM transcription (whole audio inline, single call).
   const audioBuf = await opts.audio.arrayBuffer();
@@ -97,7 +105,11 @@ export async function transcribeBrowser(opts: TranscribeBrowserOptions): Promise
 
   // 5. Identify (level 3).
   if (level >= 3 && opts.deepseekApiKey) {
-    const ds = OpenAICompatClient.fromProvider("deepseek", opts.deepseekApiKey, "deepseek-chat");
+    const ds = OpenAICompatClient.fromProvider(
+      "deepseek",
+      opts.deepseekApiKey,
+      "deepseek-chat",
+    );
     const id = await identifySpeakers(
       ds,
       "deepseek-chat",
@@ -109,7 +121,9 @@ export async function transcribeBrowser(opts: TranscribeBrowserOptions): Promise
     segments = segments.map((s) =>
       id.nameMap[s.speaker] ? { ...s, speakerName: id.nameMap[s.speaker] } : s,
     );
-    speakers = speakers.map((sp) => (id.nameMap[sp.id] ? { ...sp, name: id.nameMap[sp.id] } : sp));
+    speakers = speakers.map((sp) =>
+      id.nameMap[sp.id] ? { ...sp, name: id.nameMap[sp.id] } : sp,
+    );
   }
 
   // 6. Finalize.
@@ -122,9 +136,14 @@ export async function transcribeBrowser(opts: TranscribeBrowserOptions): Promise
       duration: asr.durationSec,
       processedAt: new Date().toISOString(),
       models: { transcribe: model, timestamped: "assemblyai-universal-2" },
-      passes: ["timestamped", "llm-transcribe", "align", "consistency", level >= 3 ? "identify" : "", "finalize"].filter(
-        Boolean,
-      ) as string[],
+      passes: [
+        "timestamped",
+        "llm-transcribe",
+        "align",
+        "consistency",
+        level >= 3 ? "identify" : "",
+        "finalize",
+      ].filter(Boolean) as string[],
     },
   };
 }

@@ -3,7 +3,13 @@
  * (aggregates: hours processed, characters emitted, cost by model, run count).
  * Best-effort — stats must never break a transcription. Opt out: OFFMUTE_NO_STATS=1.
  */
-import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 

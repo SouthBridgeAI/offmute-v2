@@ -119,14 +119,17 @@ export function formatSrt(result: TranscriptResult, opts: FormatOptions = {}): s
   let idx = 1;
   const blocks: string[] = [];
   for (const seg of result.segments) {
-    const tone = showTone && seg.tone && seg.tone.length ? ` (${seg.tone.join(", ")})` : "";
+    const tone =
+      showTone && seg.tone && seg.tone.length ? ` (${seg.tone.join(", ")})` : "";
     const speaker = labelSpeakers ? `${seg.speakerName || seg.speaker}: ` : "";
     const segBlocks = splitIntoBlocks(seg);
     for (let i = 0; i < segBlocks.length; i++) {
       const b = segBlocks[i]!;
       // Tone belongs to the turn, not every cue — annotate only the first block.
       const t = i === 0 ? tone : "";
-      blocks.push(`${idx}\n${formatSrtTiming(b.start, b.end)}\n${speaker}${b.text}${t}\n`);
+      blocks.push(
+        `${idx}\n${formatSrtTiming(b.start, b.end)}\n${speaker}${b.text}${t}\n`,
+      );
       idx++;
     }
   }
@@ -178,7 +181,10 @@ function mdHeader(result: TranscriptResult, opts: FormatOptions): string[] {
 }
 
 /** Format as a readable markdown transcript (merged paragraphs by default). */
-export function formatMarkdown(result: TranscriptResult, opts: FormatOptions = {}): string {
+export function formatMarkdown(
+  result: TranscriptResult,
+  opts: FormatOptions = {},
+): string {
   const showTone = opts.showTone ?? true;
   const timestamps = opts.timestamps ?? true;
   const style = opts.mdStyle ?? "merged";
@@ -207,7 +213,9 @@ export function formatText(result: TranscriptResult, opts: FormatOptions = {}): 
     const ts = timestamps ? `[${compactTime(first.start)}] ` : "";
     const name = first.speakerName || first.speaker;
     const text = group
-      .map((s) => (showTone && s.tone?.length ? `(${s.tone.join(", ")}) ${s.text}` : s.text))
+      .map((s) =>
+        showTone && s.tone?.length ? `(${s.tone.join(", ")}) ${s.text}` : s.text,
+      )
       .join(" ");
     lines.push(`${ts}${name}: ${text}`);
   }

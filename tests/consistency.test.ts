@@ -46,7 +46,11 @@ describe("assignGlobalSpeakers", () => {
       a(50, 100, "Presenter", "world"),
       a(100, 110, "Audience", "q"),
     ];
-    const utts = [utt(0, 50, "speaker_A"), utt(50, 100, "speaker_B"), utt(100, 110, "speaker_C")];
+    const utts = [
+      utt(0, 50, "speaker_A"),
+      utt(50, 100, "speaker_B"),
+      utt(100, 110, "speaker_C"),
+    ];
     const r = assignGlobalSpeakers(segs, utts);
     // Both presenter segments should share ONE global id.
     const ids = new Set(r.segments.slice(0, 2).map((s) => s.speaker));

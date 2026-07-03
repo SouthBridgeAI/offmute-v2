@@ -26,7 +26,9 @@ export function fillAsrGaps(
   // Build gap ranges [start, end] not covered by any segment, before/between segments
   // (not after the last — trailing silence isn't dropped content).
   const ranges: Array<[number, number, AlignedSegment | undefined]> = [];
-  const firstStart = sorted.length ? sorted[0]!.start : asrWords[asrWords.length - 1]!.end;
+  const firstStart = sorted.length
+    ? sorted[0]!.start
+    : asrWords[asrWords.length - 1]!.end;
   if (firstStart > 0) ranges.push([0, firstStart, sorted[0]]);
   for (let i = 0; i < sorted.length - 1; i++) {
     const cur = sorted[i]!;
@@ -71,7 +73,12 @@ export function fillAsrGaps(
       tone: [],
       confidence: 0,
       timingSource: "timestamped",
-      words: words.map((w) => ({ text: w.text, start: w.start, end: w.end, matched: true })),
+      words: words.map((w) => ({
+        text: w.text,
+        start: w.start,
+        end: w.end,
+        matched: true,
+      })),
       sourceIndex: -1,
     });
   }

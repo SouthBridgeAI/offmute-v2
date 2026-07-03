@@ -11,7 +11,10 @@ export function notify(title: string, message: string): void {
     if (process.platform === "darwin") {
       execFile(
         "osascript",
-        ["-e", `display notification "${esc(message)}" with title "${esc(title)}" sound name "Glass"`],
+        [
+          "-e",
+          `display notification "${esc(message)}" with title "${esc(title)}" sound name "Glass"`,
+        ],
         () => {},
       );
     } else if (process.platform === "linux") {

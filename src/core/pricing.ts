@@ -93,7 +93,9 @@ export function estimateRunCost(opts: {
   );
   // Overlap seconds get transcribed twice; describe adds ~370s of samples.
   const billedAudioSec =
-    opts.durationSec + Math.max(0, chunks - 1) * opts.overlapSec + Math.min(370, opts.durationSec);
+    opts.durationSec +
+    Math.max(0, chunks - 1) * opts.overlapSec +
+    Math.min(370, opts.durationSec);
   if (p) {
     const audioTok = billedAudioSec * AUDIO_TOKENS_PER_SEC;
     const promptTok = chunks * 1500;
@@ -113,7 +115,9 @@ export function estimateRunCost(opts: {
   const asr = asrCost(opts.tsProvider, opts.durationSec);
   if (asr !== null && opts.tsProvider !== "none") {
     total += asr;
-    lines.push(`${opts.tsProvider}: ${(opts.durationSec / 60).toFixed(0)}min ≈ $${asr.toFixed(2)}`);
+    lines.push(
+      `${opts.tsProvider}: ${(opts.durationSec / 60).toFixed(0)}min ≈ $${asr.toFixed(2)}`,
+    );
   }
 
   if (opts.identify && opts.reasoner) {
@@ -165,7 +169,9 @@ export function computeReceipt(
     const p = priceFor(model);
     if (!p) {
       incomplete = true;
-      lines.push(`${model}: ${m.calls} calls · ${fmtTok(m.in)} in / ${fmtTok(m.out)} out · unpriced`);
+      lines.push(
+        `${model}: ${m.calls} calls · ${fmtTok(m.in)} in / ${fmtTok(m.out)} out · unpriced`,
+      );
       continue;
     }
     // Transcription input is predominantly audio — bill input at the audio rate when
@@ -180,7 +186,9 @@ export function computeReceipt(
   const asrUsd = tsProvider === "none" ? 0 : asrCost(tsProvider, durationSec);
   if (asrUsd !== null && tsProvider !== "none") {
     perModel[tsProvider] = asrUsd;
-    lines.push(`${tsProvider}: ${(durationSec / 60).toFixed(0)}min · $${asrUsd.toFixed(2)}`);
+    lines.push(
+      `${tsProvider}: ${(durationSec / 60).toFixed(0)}min · $${asrUsd.toFixed(2)}`,
+    );
   }
   return {
     totalUsd: llmUsd + (asrUsd ?? 0),

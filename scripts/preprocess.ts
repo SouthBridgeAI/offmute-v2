@@ -46,7 +46,9 @@ async function main() {
   const silences = await detectSilence(audioPath, { noiseDb: -30, minDuration: 0.3 });
   logger.info(`found ${silences.length} silent ranges (first 5):`);
   for (const s of silences.slice(0, 5)) {
-    console.log(`  ${s.start.toFixed(2)} - ${s.end.toFixed(2)} (${s.duration.toFixed(2)}s)`);
+    console.log(
+      `  ${s.start.toFixed(2)} - ${s.end.toFixed(2)} (${s.duration.toFixed(2)}s)`,
+    );
   }
 
   if (info.hasVideo) {

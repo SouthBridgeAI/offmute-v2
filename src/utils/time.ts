@@ -36,7 +36,10 @@ export function parseSrtTiming(
 ): { start: number; end: number } | null {
   const parts = timingString.split("-->");
   if (parts.length !== 2) return null;
-  return { start: timestampToSeconds(parts[0]!.trim()), end: timestampToSeconds(parts[1]!.trim()) };
+  return {
+    start: timestampToSeconds(parts[0]!.trim()),
+    end: timestampToSeconds(parts[1]!.trim()),
+  };
 }
 
 /** Format start/end seconds as an SRT timing line. */

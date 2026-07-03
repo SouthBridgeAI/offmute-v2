@@ -73,7 +73,11 @@ function transferTiming(
   for (const op of ops) {
     if (op.type === "match" || op.type === "substitute") {
       const a = asr[op.asr]!;
-      times[op.llm] = { start: a.start, end: a.end, matched: op.type === "match" && !op.fuzzy };
+      times[op.llm] = {
+        start: a.start,
+        end: a.end,
+        matched: op.type === "match" && !op.fuzzy,
+      };
     }
   }
   // Interpolate inserted (unmatched) tokens from neighboring matched tokens.
@@ -128,7 +132,9 @@ export function alignSegments(
   const confThreshold = opts.confidenceThreshold ?? 0.5;
   const margin = opts.timeMarginSec ?? 0;
 
-  const sorted = [...llmSegments].map((s, i) => ({ s, i })).sort((a, b) => a.s.startSec - b.s.startSec);
+  const sorted = [...llmSegments]
+    .map((s, i) => ({ s, i }))
+    .sort((a, b) => a.s.startSec - b.s.startSec);
 
   // Build flat LLM token stream + per-segment token ranges.
   const flat: LlmTok[] = [];
@@ -177,7 +183,10 @@ export function alignSegments(
     const range = segRanges[si]!;
     const segTimes = times.slice(range.start, range.end);
     const segOps = result.ops.filter(
-      (op) => (op.type === "match" || op.type === "substitute") && op.llm >= range.start && op.llm < range.end,
+      (op) =>
+        (op.type === "match" || op.type === "substitute") &&
+        op.llm >= range.start &&
+        op.llm < range.end,
     );
     const exact = segOps.filter((op) => op.type === "match" && !op.fuzzy).length;
     const tokenCount = range.end - range.start;

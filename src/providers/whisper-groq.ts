@@ -26,7 +26,8 @@ export class WhisperGroqClient {
   ) {}
 
   async transcribe(audio: Blob | ArrayBuffer | Uint8Array): Promise<TimestampedResult> {
-    const blob = audio instanceof Blob ? audio : new Blob([audio], { type: "audio/mpeg" });
+    const blob =
+      audio instanceof Blob ? audio : new Blob([audio], { type: "audio/mpeg" });
     const form = new FormData();
     form.append("file", blob, "audio.mp3");
     form.append("model", this.model);

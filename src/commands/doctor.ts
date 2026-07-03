@@ -24,7 +24,11 @@ async function ping(url: string, headers: Record<string, string>): Promise<void>
 
 function providerChecks(keys: ApiKeys): Check[] {
   const checks: Check[] = [];
-  const add = (name: string, key: string | undefined, fn: (k: string) => Promise<void>) => {
+  const add = (
+    name: string,
+    key: string | undefined,
+    fn: (k: string) => Promise<void>,
+  ) => {
     checks.push({
       name,
       run: async () => {
@@ -35,7 +39,10 @@ function providerChecks(keys: ApiKeys): Check[] {
     });
   };
   add("gemini (transcribe)", keys.gemini, (k) =>
-    ping(`https://generativelanguage.googleapis.com/v1beta/models?pageSize=1&key=${k}`, {}),
+    ping(
+      `https://generativelanguage.googleapis.com/v1beta/models?pageSize=1&key=${k}`,
+      {},
+    ),
   );
   add("assemblyai (timestamped)", keys.assemblyai, (k) =>
     ping("https://api.assemblyai.com/v2/transcript?limit=1", { authorization: k }),
@@ -78,7 +85,9 @@ export async function runDoctor(): Promise<void> {
 
   // ffmpeg first — nothing works without it.
   const ff = await checkFfmpeg();
-  console.log(`  ${ff ? "✓" : "✗"}  ffmpeg/ffprobe ${ff ? "found in PATH" : "NOT FOUND — install ffmpeg"}`);
+  console.log(
+    `  ${ff ? "✓" : "✗"}  ffmpeg/ffprobe ${ff ? "found in PATH" : "NOT FOUND — install ffmpeg"}`,
+  );
 
   const checks = providerChecks(keys);
   const results = await Promise.allSettled(checks.map((c) => c.run()));
@@ -103,7 +112,9 @@ export async function runDoctor(): Promise<void> {
   } else {
     if (!ff) console.log("  Blocked: install ffmpeg (e.g. `brew install ffmpeg`).");
     if (!geminiOk)
-      console.log("  Blocked: set GEMINI_API_KEY (or GOOGLE_API_KEY) — required for transcription.");
+      console.log(
+        "  Blocked: set GEMINI_API_KEY (or GOOGLE_API_KEY) — required for transcription.",
+      );
     if (!clockOk)
       console.log(
         "  Degraded: no timestamped provider (ASSEMBLYAI/ELEVENLABS/GROQ key) — timestamps will be coarse.",

@@ -16,7 +16,9 @@ async function main() {
   const asrPath = resolve("./intermediates/timestamped-test/timestamped.json");
   const refPath = resolve("../test-files/1/talk-with-questions.srt");
 
-  const llm = JSON.parse(readFileSync(llmPath, "utf-8")) as { segments: ParsedLlmSegment[] };
+  const llm = JSON.parse(readFileSync(llmPath, "utf-8")) as {
+    segments: ParsedLlmSegment[];
+  };
   const asr = JSON.parse(readFileSync(asrPath, "utf-8")) as { words: TimestampedWord[] };
   const ref = parseSrt(readFileSync(refPath, "utf-8"));
 
@@ -66,9 +68,7 @@ async function main() {
     }
     gaps.push(best);
   }
-  console.log(
-    `\n=== vs REFERENCE SRT (first 5min, ${refFirst5.length} ref entries) ===`,
-  );
+  console.log(`\n=== vs REFERENCE SRT (first 5min, ${refFirst5.length} ref entries) ===`);
   console.log(
     `nearest-ref start gap: median ${median(gaps).toFixed(2)}s, p90 ${percentile(gaps, 0.9).toFixed(2)}s, max ${Math.max(...gaps).toFixed(2)}s`,
   );

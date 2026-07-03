@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="docs/assets/mascot.png" alt="offmute — a frog that listens carefully" width="520">
+<img src="https://raw.githubusercontent.com/SouthBridgeAI/offmute-v2/fable/docs/assets/mascot.png" alt="offmute — a frog that listens carefully" width="520">
 
 # offmute-v2
 
@@ -23,9 +23,9 @@ npx offmute-v2@fable meeting.mp4
 ---
 
 <div align="center">
-<img src="docs/assets/whos-speaking.png" alt='Iron Man: "Who&apos;s speaking?" — Ant-Man, inside the suit: "It&apos;s your conscience. We don&apos;t talk a lot these days."' width="420">
+<img src="https://raw.githubusercontent.com/SouthBridgeAI/offmute-v2/fable/docs/assets/whos-speaking.png" alt='Iron Man: "Who&apos;s speaking?" — Ant-Man, inside the suit: "It&apos;s your conscience. We don&apos;t talk a lot these days."' width="420">
 
-*the eternal diarization problem. Tony had one unknown speaker and still needed help.*
+_the eternal diarization problem. Tony had one unknown speaker and still needed help._
 
 </div>
 
@@ -152,7 +152,8 @@ the seams that actually determine day-to-day quality:
 
 Measured on a hand-checked 32-minute talk with audience Q&A: **≈8% WER, ~99% word-level speaker
 attribution, first cue within 40ms of reference.** Receipts, methodology, and an independent
-re-score live in [`docs/`](docs/) and the [write-up](https://southbridge.ai/blog/offmute-v2-glm-vs-opus).
+re-score live in [`docs/`](https://github.com/SouthBridgeAI/offmute-v2/tree/fable/docs) and the
+[write-up](https://southbridge.ai/blog/offmute-v2-glm-vs-opus).
 
 ## Daemon mode
 
@@ -275,8 +276,10 @@ This repo is an experiment receipt as much as a tool. The same brief — fuse
 [ipgu](https://github.com/hrishioa/ipgu)'s alignment discipline — was given independently to two
 frontier models working autonomously. Both built the whole thing; both landed on the same
 architecture; the differences live in the seams. Their unedited process logs, self-reviews, and
-my manual reviews are preserved on the [`glm`](../../tree/glm) and [`opus`](../../tree/opus)
-branches, published as `offmute-v2@glm` and `offmute-v2@opus`. A third line — this one,
+my manual reviews are preserved on the
+[`glm`](https://github.com/SouthBridgeAI/offmute-v2/tree/glm) and
+[`opus`](https://github.com/SouthBridgeAI/offmute-v2/tree/opus) branches, published as
+`offmute-v2@glm` and `offmute-v2@opus`. A third line — this one,
 `offmute-v2@fable` — took everything both learned and kept going.
 
 Full write-up: [**"The frontier is open-source today"**](https://southbridge.ai/blog/offmute-v2-glm-vs-opus).
@@ -291,7 +294,8 @@ npm run typecheck # strict tsc
 npm run dev -- path/to/file.mp4
 ```
 
-Releases ship via npm Trusted Publishing — see [RELEASING.md](RELEASING.md) for the
+Releases ship via npm Trusted Publishing — see
+[RELEASING.md](https://github.com/SouthBridgeAI/offmute-v2/blob/fable/RELEASING.md) for the
 branch/dist-tag map.
 
 ---

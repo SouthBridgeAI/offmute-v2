@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { formatMarkdown, formatText, formatSrt, compactTime } from "../src/finalize/format.js";
+import {
+  formatMarkdown,
+  formatText,
+  formatSrt,
+  compactTime,
+} from "../src/finalize/format.js";
 import type { TranscriptResult, Segment } from "../src/core/types.js";
 
 function seg(partial: Partial<Segment> & { id: number }): Segment {
@@ -17,7 +22,13 @@ function result(segments: Segment[]): TranscriptResult {
   return {
     segments,
     speakers: [{ id: "Speaker A", name: "Alice", talkTime: 10 }],
-    metadata: { sourceFile: "x.mp4", duration: 60, processedAt: "", models: {}, passes: [] },
+    metadata: {
+      sourceFile: "x.mp4",
+      duration: 60,
+      processedAt: "",
+      models: {},
+      passes: [],
+    },
   };
 }
 
@@ -25,7 +36,14 @@ describe("formatMarkdown", () => {
   const segs = [
     seg({ id: 1, start: 0, end: 2, speakerName: "Alice", text: "First." }),
     seg({ id: 2, start: 2, end: 4, speakerName: "Alice", text: "Second." }),
-    seg({ id: 3, start: 4, end: 6, speakerName: "Bob", speaker: "Speaker B", text: "Reply." }),
+    seg({
+      id: 3,
+      start: 4,
+      end: 6,
+      speakerName: "Bob",
+      speaker: "Speaker B",
+      text: "Reply.",
+    }),
     seg({ id: 4, start: 6, end: 8, speakerName: "Alice", text: "Back again." }),
   ];
 
@@ -47,8 +65,22 @@ describe("formatMarkdown", () => {
 
   it("suppresses consecutive duplicate tone tags within a merged group", () => {
     const toned = [
-      seg({ id: 1, start: 0, end: 2, speakerName: "Alice", text: "Ha!", tone: ["laughing"] }),
-      seg({ id: 2, start: 2, end: 4, speakerName: "Alice", text: "So funny.", tone: ["laughing"] }),
+      seg({
+        id: 1,
+        start: 0,
+        end: 2,
+        speakerName: "Alice",
+        text: "Ha!",
+        tone: ["laughing"],
+      }),
+      seg({
+        id: 2,
+        start: 2,
+        end: 4,
+        speakerName: "Alice",
+        text: "So funny.",
+        tone: ["laughing"],
+      }),
       seg({ id: 3, start: 4, end: 6, speakerName: "Alice", text: "Anyway.", tone: [] }),
     ];
     const md = formatMarkdown(result(toned));
@@ -102,7 +134,8 @@ describe("formatSrt cue caps", () => {
     const times = [...srt.matchAll(/(\d\d):(\d\d):(\d\d),(\d\d\d) -->/g)].map(
       (m) => +m[1]! * 3600 + +m[2]! * 60 + +m[3]! + +m[4]! / 1000,
     );
-    for (let i = 1; i < times.length; i++) expect(times[i]!).toBeGreaterThanOrEqual(times[i - 1]!);
+    for (let i = 1; i < times.length; i++)
+      expect(times[i]!).toBeGreaterThanOrEqual(times[i - 1]!);
   });
 });
 

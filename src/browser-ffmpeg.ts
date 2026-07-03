@@ -22,7 +22,9 @@ const DEFAULT_CORE_BASE = "https://unpkg.com/@ffmpeg/core@0.12.10/dist/umd";
 
 let ffmpegInstance: import("@ffmpeg/ffmpeg").FFmpeg | null = null;
 
-async function loadFfmpeg(opts: FfmpegWasmOptions = {}): Promise<import("@ffmpeg/ffmpeg").FFmpeg> {
+async function loadFfmpeg(
+  opts: FfmpegWasmOptions = {},
+): Promise<import("@ffmpeg/ffmpeg").FFmpeg> {
   if (ffmpegInstance) return ffmpegInstance;
   const { FFmpeg } = await import("@ffmpeg/ffmpeg");
   const { toBlobURL } = await import("@ffmpeg/util");
@@ -36,7 +38,11 @@ async function loadFfmpeg(opts: FfmpegWasmOptions = {}): Promise<import("@ffmpeg
   return ffmpeg;
 }
 
-async function writeInput(ffmpeg: import("@ffmpeg/ffmpeg").FFmpeg, blob: Blob, name: string) {
+async function writeInput(
+  ffmpeg: import("@ffmpeg/ffmpeg").FFmpeg,
+  blob: Blob,
+  name: string,
+) {
   const { fetchFile } = await import("@ffmpeg/util");
   await ffmpeg.writeFile(name, await fetchFile(blob));
 }
@@ -66,7 +72,18 @@ export async function preprocessInBrowser(
   await writeInput(ffmpeg, input, inFile);
 
   // Whole audio (mono 16kHz FLAC) for the ASR pass.
-  await ffmpeg.exec(["-i", inFile, "-vn", "-ac", "1", "-ar", "16000", "-c:a", "flac", "audio.flac"]);
+  await ffmpeg.exec([
+    "-i",
+    inFile,
+    "-vn",
+    "-ac",
+    "1",
+    "-ar",
+    "16000",
+    "-c:a",
+    "flac",
+    "audio.flac",
+  ]);
   const audioData = (await ffmpeg.readFile("audio.flac")) as Uint8Array;
   const audio = new Blob([audioData], { type: "audio/flac" });
 
@@ -76,12 +93,32 @@ export async function preprocessInBrowser(
     const c = chunks[i]!;
     const name = `chunk_${i}.flac`;
     await ffmpeg.exec([
-      "-i", inFile, "-ss", c.start.toFixed(3), "-t", (c.end - c.start).toFixed(3),
-      "-vn", "-ac", "1", "-ar", "16000", "-c:a", "flac", name,
+      "-i",
+      inFile,
+      "-ss",
+      c.start.toFixed(3),
+      "-t",
+      (c.end - c.start).toFixed(3),
+      "-vn",
+      "-ac",
+      "1",
+      "-ar",
+      "16000",
+      "-c:a",
+      "flac",
+      name,
     ]);
     const data = (await ffmpeg.readFile(name)) as Uint8Array;
-    chunkBlobs.push({ data: new Blob([data], { type: "audio/flac" }), start: c.start, end: c.end });
-    try { await ffmpeg.deleteFile(name); } catch { /* ignore */ }
+    chunkBlobs.push({
+      data: new Blob([data], { type: "audio/flac" }),
+      start: c.start,
+      end: c.end,
+    });
+    try {
+      await ffmpeg.deleteFile(name);
+    } catch {
+      /* ignore */
+    }
   }
 
   // Keyframes (video only).
@@ -91,13 +128,30 @@ export async function preprocessInBrowser(
     for (let i = 0; i < n; i++) {
       const t = (i + 0.5) / n; // fraction — caller should pass real times; simplified here
       const name = `kf_${i}.jpg`;
-      await ffmpeg.exec(["-i", inFile, "-ss", (t * 1).toFixed(3), "-frames:v", "1", name]);
+      await ffmpeg.exec([
+        "-i",
+        inFile,
+        "-ss",
+        (t * 1).toFixed(3),
+        "-frames:v",
+        "1",
+        name,
+      ]);
       const data = (await ffmpeg.readFile(name)) as Uint8Array;
       keyframes.push(new Blob([data], { type: "image/jpeg" }));
-      try { await ffmpeg.deleteFile(name); } catch { /* ignore */ }
+      try {
+        await ffmpeg.deleteFile(name);
+      } catch {
+        /* ignore */
+      }
     }
   }
 
-  try { await ffmpeg.deleteFile(inFile); await ffmpeg.deleteFile("audio.flac"); } catch { /* ignore */ }
+  try {
+    await ffmpeg.deleteFile(inFile);
+    await ffmpeg.deleteFile("audio.flac");
+  } catch {
+    /* ignore */
+  }
   return { audio, chunks: chunkBlobs, keyframes };
 }

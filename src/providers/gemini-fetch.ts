@@ -50,7 +50,11 @@ export function toBase64(data: ArrayBuffer | Uint8Array): string {
     binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
   }
   // btoa is available in browser and node 20+ (global).
-  return (typeof btoa !== "undefined" ? btoa : (s: string) => Buffer.from(s, "binary").toString("base64"))(binary);
+  return (
+    typeof btoa !== "undefined"
+      ? btoa
+      : (s: string) => Buffer.from(s, "binary").toString("base64")
+  )(binary);
 }
 
 export class GeminiFetchClient {
@@ -85,8 +89,10 @@ export class GeminiFetchClient {
       },
     };
     if (opts.responseSchema) {
-      (body.generationConfig as Record<string, unknown>).responseMimeType = "application/json";
-      (body.generationConfig as Record<string, unknown>).responseSchema = opts.responseSchema;
+      (body.generationConfig as Record<string, unknown>).responseMimeType =
+        "application/json";
+      (body.generationConfig as Record<string, unknown>).responseSchema =
+        opts.responseSchema;
     }
     if (opts.systemInstruction) body.systemInstruction = opts.systemInstruction;
 
@@ -107,7 +113,11 @@ export class GeminiFetchClient {
         }
         const data = (await res.json()) as {
           candidates?: { content?: { parts?: { text?: string }[] } }[];
-          usageMetadata?: { promptTokenCount?: number; candidatesTokenCount?: number; totalTokenCount?: number };
+          usageMetadata?: {
+            promptTokenCount?: number;
+            candidatesTokenCount?: number;
+            totalTokenCount?: number;
+          };
         };
         const text =
           data.candidates?.[0]?.content?.parts?.map((p) => p.text || "").join("") ?? "";
@@ -122,10 +132,15 @@ export class GeminiFetchClient {
         };
       } catch (err) {
         lastError = err instanceof Error ? err.message : String(err);
-        if (attempt < maxRetries - 1) await new Promise((r) => setTimeout(r, 1500 * (attempt + 1)));
+        if (attempt < maxRetries - 1)
+          await new Promise((r) => setTimeout(r, 1500 * (attempt + 1)));
       }
     }
-    return { text: "", usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 }, error: lastError };
+    return {
+      text: "",
+      usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+      error: lastError,
+    };
   }
 
   async generateJson<T = unknown>(
@@ -143,7 +158,11 @@ export class GeminiFetchClient {
       if (f && f[1]) t = f[1];
       return { data: JSON.parse(t) as T, raw: r.text };
     } catch (err) {
-      return { data: null, raw: r.text, error: `JSON parse: ${err instanceof Error ? err.message : String(err)}` };
+      return {
+        data: null,
+        raw: r.text,
+        error: `JSON parse: ${err instanceof Error ? err.message : String(err)}`,
+      };
     }
   }
 }

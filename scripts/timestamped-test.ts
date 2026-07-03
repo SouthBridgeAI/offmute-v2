@@ -20,7 +20,9 @@ async function main() {
   const result = await provider.transcribe(audio);
   console.log(`\nDone in ${((Date.now() - t0) / 1000).toFixed(1)}s`);
   console.log(`speech model used: ${result.speechModelUsed}`);
-  console.log(`duration: ${result.durationSec.toFixed(1)}s (audio: ${result.audioDurationSec?.toFixed(1)}s)`);
+  console.log(
+    `duration: ${result.durationSec.toFixed(1)}s (audio: ${result.audioDurationSec?.toFixed(1)}s)`,
+  );
   console.log(`utterances: ${result.utterances.length}, words: ${result.words.length}`);
   console.log(`speakers: ${result.speakers.join(", ")}`);
 
@@ -33,10 +35,13 @@ async function main() {
 
   // Speaker talk-time breakdown.
   const talk: Record<string, number> = {};
-  for (const u of result.utterances) talk[u.speaker] = (talk[u.speaker] || 0) + (u.end - u.start);
+  for (const u of result.utterances)
+    talk[u.speaker] = (talk[u.speaker] || 0) + (u.end - u.start);
   console.log("\n=== TALK TIME ===");
   for (const [sp, sec] of Object.entries(talk)) {
-    console.log(`  ${sp}: ${sec.toFixed(0)}s (${((sec / result.durationSec) * 100).toFixed(0)}%)`);
+    console.log(
+      `  ${sp}: ${sec.toFixed(0)}s (${((sec / result.durationSec) * 100).toFixed(0)}%)`,
+    );
   }
 
   writeFileSync(`${outDir}/timestamped.json`, JSON.stringify(result, null, 2));
