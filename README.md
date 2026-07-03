@@ -11,7 +11,7 @@ Every word on the right millisecond. Every speaker told apart — and named.
 <br>
 
 ```bash
-npx offmute-v2@fable meeting.mp4
+npx offmute-v2 meeting.mp4
 ```
 
 [![npm](https://img.shields.io/npm/v/offmute-v2?color=cb3837&logo=npm)](https://www.npmjs.com/package/offmute-v2)&nbsp;
@@ -49,7 +49,7 @@ name verified by a second model before it ships.
 export GEMINI_API_KEY=...        # the ears  (aistudio.google.com/apikey)
 export ASSEMBLYAI_API_KEY=...    # the clock (assemblyai.com — $0.15/hr)
 
-npx offmute-v2@fable meeting.mp4
+npx offmute-v2 meeting.mp4
 # → meeting.md, right next to meeting.mp4
 ```
 
@@ -57,7 +57,7 @@ That's the whole thing. First run checks your setup and tells you what any missi
 unlock. Every run shows you what it will cost before spending, and what it spent after:
 
 ```text
-offmute-v2 0.1.0-fable.0  team-call.mp4
+offmute-v2 0.1.0  team-call.mp4
 
   estimate ~$0.30  [gemini-3.1-pro-preview: 4 chunks + describe ≈ $0.22 · assemblyai: 28min ≈ $0.07 · …]
 ✓ preparing media · extracting keyframes 28s
@@ -285,7 +285,7 @@ my manual reviews are preserved on the
 `[glm](https://github.com/SouthBridgeAI/offmute-v2/tree/glm)` and
 `[opus](https://github.com/SouthBridgeAI/offmute-v2/tree/opus)` branches, published as
 `offmute-v2@glm` and `offmute-v2@opus`. A third line — this one,
-`offmute-v2@fable` — took everything both learned and kept going.
+`offmute-v2@fable`, now the primary — took everything both learned and kept going.
 
 Full write-up: **["The frontier is open-source today"](https://southbridge.ai/blog/offmute-v2-glm-vs-opus)**.
 
