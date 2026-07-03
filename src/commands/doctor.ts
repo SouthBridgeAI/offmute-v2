@@ -105,17 +105,31 @@ export async function runDoctor(): Promise<void> {
   });
 
   console.log("");
-  const geminiOk = results[0]?.status === "fulfilled";
-  const clockOk = [1, 2, 3].some((i) => results[i]?.status === "fulfilled");
-  if (ff && geminiOk && clockOk) {
+  const okByName = (needle: string) =>
+    checks.some(
+      (c, i) => c.name.startsWith(needle) && results[i]?.status === "fulfilled",
+    );
+  const geminiOk = okByName("gemini");
+  const assemblyOk = okByName("assemblyai");
+  const elevenOk = okByName("elevenlabs");
+  const groqOk = okByName("groq");
+  if (ff && geminiOk && assemblyOk) {
     console.log("  Ready: transcription will work with the current setup.\n");
+  } else if (ff && geminiOk && (elevenOk || groqOk)) {
+    // A clock exists, but not the DEFAULT one — plain `offmute-v2 file.mp4` would still
+    // fail on the missing AssemblyAI key, so say exactly which flag makes it work.
+    const alt = elevenOk ? "--timestamped elevenlabs" : "--timestamped whisper-groq";
+    console.log(
+      `  Ready with ${alt}: the default clock (AssemblyAI) is missing, so plain runs will fail —`,
+    );
+    console.log(`  add ASSEMBLYAI_API_KEY or pass ${alt}.\n`);
   } else {
     if (!ff) console.log("  Blocked: install ffmpeg (e.g. `brew install ffmpeg`).");
     if (!geminiOk)
       console.log(
         "  Blocked: set GEMINI_API_KEY (or GOOGLE_API_KEY) — required for transcription.",
       );
-    if (!clockOk)
+    if (!assemblyOk && !elevenOk && !groqOk)
       console.log(
         "  Degraded: no timestamped provider (ASSEMBLYAI/ELEVENLABS/GROQ key) — timestamps will be coarse.",
       );

@@ -45,10 +45,18 @@ const MEDIA_EXTS = new Set([
 const POLL_MS = 5000;
 
 interface WatchState {
-  /** inputSignature → record */
+  /** inputSignature → record. Records with `error` are retried on the NEXT daemon
+   * start (transient failures shouldn't need manual state surgery); records that
+   * succeeded or were `skipped` (--no-backlog) are final. */
   done: Record<
     string,
-    { file: string; finishedAt: string; segments?: number; error?: string }
+    {
+      file: string;
+      finishedAt: string;
+      segments?: number;
+      error?: string;
+      skipped?: boolean;
+    }
   >;
 }
 
@@ -117,9 +125,13 @@ export async function runWatch(dir: string, opts: WatchCliOptions): Promise<void
     }
   };
 
+  // Files that failed IN THIS SESSION don't retry until the daemon restarts —
+  // otherwise a deterministic failure would loop on every scan.
+  const failedThisSession = new Set<string>();
+
   const scan = (isFirst = false) => {
     for (const file of listCandidates()) {
-      if (queued.has(file)) continue;
+      if (queued.has(file) || failedThisSession.has(file)) continue;
       let st;
       try {
         st = statSync(file);
@@ -128,16 +140,28 @@ export async function runWatch(dir: string, opts: WatchCliOptions): Promise<void
       }
       if (st.size === 0) continue;
       const sig = inputSignature(file);
-      if (state.done[sig]) continue; // already processed this exact file
+      let record = state.done[sig];
       if (isFirst && !opts.backlog) {
-        // --no-backlog: pre-existing files are recorded as skipped, not processed.
-        state.done[sig] = {
-          file: basename(file),
-          finishedAt: new Date().toISOString(),
-          error: "skipped (pre-existing, --no-backlog)",
-        };
+        // --no-backlog: anything already in the folder (including past failures) is
+        // recorded as skipped, not processed.
+        if (!record || record.error) {
+          state.done[sig] = {
+            file: basename(file),
+            finishedAt: new Date().toISOString(),
+            skipped: true,
+          };
+        }
         continue;
       }
+      // A record with `error` is a past failure: clear it at daemon start so the file
+      // gets one retry per start (it resumes from the intermediates cache anyway).
+      if (isFirst && record?.error) {
+        delete state.done[sig];
+        record = undefined;
+        log(`retrying ${basename(file)} (failed last session)`);
+      }
+      // Finished or deliberately-skipped files are final.
+      if (record) continue;
       const prev = seenSizes.get(file);
       if (prev && prev.size === st.size && prev.mtimeMs === st.mtimeMs) {
         queued.add(file);
@@ -154,7 +178,9 @@ export async function runWatch(dir: string, opts: WatchCliOptions): Promise<void
 
   // --- worker -------------------------------------------------------------
   let stopping = false;
-  const controller = { current: null as AbortController | null };
+  // One controller per in-flight job — Ctrl-C must abort ALL of them, not just
+  // whichever started last (--jobs > 1).
+  const activeControllers = new Set<AbortController>();
   const jobs = Math.max(1, parseInt(opts.jobs, 10) || 1);
   let active = 0;
 
@@ -172,7 +198,7 @@ export async function runWatch(dir: string, opts: WatchCliOptions): Promise<void
   const runJob = async (file: string): Promise<void> => {
     const name = basename(file);
     const abort = new AbortController();
-    controller.current = abort;
+    activeControllers.add(abort);
     log(`start    ${name}`);
     const t0 = Date.now();
     try {
@@ -214,12 +240,13 @@ export async function runWatch(dir: string, opts: WatchCliOptions): Promise<void
         finishedAt: new Date().toISOString(),
         error: msg,
       };
+      failedThisSession.add(file);
       saveState();
-      log(`FAILED   ${name} — ${msg}`);
+      log(`FAILED   ${name} — ${msg} (will retry on next daemon start)`);
       notify("offmute-v2 watch", `${name} FAILED — ${msg.slice(0, 80)}`);
     } finally {
       queued.delete(file);
-      controller.current = null;
+      activeControllers.delete(abort);
     }
   };
 
@@ -231,9 +258,9 @@ export async function runWatch(dir: string, opts: WatchCliOptions): Promise<void
     }
     stopping = true;
     log(
-      `stopping — ${controller.current ? "finishing current stage, " : ""}state saved. (Ctrl-C again to force)`,
+      `stopping — ${activeControllers.size ? `aborting ${activeControllers.size} running job(s) at the next stage boundary, ` : ""}state saved. (Ctrl-C again to force)`,
     );
-    controller.current?.abort();
+    for (const c of activeControllers) c.abort();
     // Exit once the active job unwinds.
     const wait = setInterval(() => {
       if (active === 0) {

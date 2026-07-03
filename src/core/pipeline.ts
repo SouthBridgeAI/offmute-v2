@@ -653,12 +653,27 @@ export async function transcribe(opts: PipelineOptions): Promise<TranscriptResul
       // Cached naming: a re-run (e.g. for another output format) reuses the verified
       // names instead of re-paying the reasoners. Cached only when it actually named
       // someone — an empty result usually means a transient failure worth retrying.
+      // The cache carries its own identify config: switching --identify mode or the
+      // reasoners invalidates just this stage, not the (expensive) transcription cache.
+      const idConfig = {
+        mode,
+        reasonerA: reasonerA.info.model,
+        reasonerB: reasonerB?.info.model ?? null,
+      };
       const idCachePath = `${options.intermediatesDir}/identified.json`;
       const cachedId = forceAll
         ? null
-        : readJson<{ nameMap?: Record<string, string> }>(idCachePath);
+        : readJson<{ nameMap?: Record<string, string>; config?: typeof idConfig }>(
+            idCachePath,
+          );
+      const idConfigMatches =
+        cachedId?.config && JSON.stringify(cachedId.config) === JSON.stringify(idConfig);
       let nameMap: Record<string, string> | null = null;
-      if (cachedId?.nameMap && Object.keys(cachedId.nameMap).length > 0) {
+      if (
+        idConfigMatches &&
+        cachedId?.nameMap &&
+        Object.keys(cachedId.nameMap).length > 0
+      ) {
         logger.info("=== identify (cached) ===");
         nameMap = cachedId.nameMap;
       } else {
@@ -691,7 +706,7 @@ export async function transcribe(opts: PipelineOptions): Promise<TranscriptResul
             sourceFileName: basename(options.input),
           },
         ).catch(stageTag("identify"));
-        writeJson(idCachePath, id);
+        writeJson(idCachePath, { ...id, config: idConfig });
         nameMap = id.nameMap;
       }
       logger.info(

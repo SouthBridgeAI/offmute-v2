@@ -8,6 +8,7 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
+  rmdirSync,
   writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
@@ -72,31 +73,74 @@ export function readStats(): LifetimeStats {
   }
 }
 
+/**
+ * Tiny cross-process advisory lock (mkdir is atomic on every platform). Two CLI
+ * processes finishing at the same moment must not lose each other's aggregate fold.
+ * Held for microseconds; a stale lock (crashed process) is ignored after ~2s.
+ */
+function withStatsLock(dir: string, fn: () => void): void {
+  const lock = join(dir, ".stats.lock");
+  const deadline = Date.now() + 2000;
+  for (;;) {
+    try {
+      mkdirSync(lock);
+      break;
+    } catch {
+      if (Date.now() > deadline) break; // stale/contended — proceed rather than hang
+      // Busy-wait a few ms; the critical section is sync and sub-millisecond.
+      const until = Date.now() + 25;
+      while (Date.now() < until) {
+        /* spin */
+      }
+    }
+  }
+  try {
+    fn();
+  } finally {
+    try {
+      rmdirSync(lock);
+    } catch {
+      /* already gone */
+    }
+  }
+}
+
 /** Record a finished run: append to history, fold into aggregates. */
 export function recordRun(rec: RunRecord, perModelCost: Record<string, number>): void {
   if (!statsEnabled()) return;
   try {
     const dir = statsDir();
     mkdirSync(dir, { recursive: true });
+    // history.jsonl is the append-only source of truth (O_APPEND, one line per run).
     appendFileSync(join(dir, "history.jsonl"), JSON.stringify(rec) + "\n");
 
-    const s = readStats();
-    s.runs += 1;
-    s.mediaSeconds += rec.durationSec;
-    s.characters += rec.characters;
-    s.llmCalls += rec.llmCalls;
-    s.inputTokens += rec.inputTokens;
-    s.outputTokens += rec.outputTokens;
-    if (rec.costUsd !== null) s.costUsd += rec.costUsd;
-    for (const [model, usd] of Object.entries(perModelCost)) {
-      s.costByModel[model] = (s.costByModel[model] ?? 0) + usd;
-    }
-    const tModel = rec.models.transcribe;
-    if (tModel) s.runsByModel[tModel] = (s.runsByModel[tModel] ?? 0) + 1;
-    s.firstRun ??= rec.ts;
-    s.lastRun = rec.ts;
-    writeFileSync(join(dir, "stats.json"), JSON.stringify(s, null, 2));
+    withStatsLock(dir, () => {
+      foldIntoAggregates(rec, perModelCost, dir);
+    });
   } catch {
     /* stats are best-effort */
   }
+}
+
+function foldIntoAggregates(
+  rec: RunRecord,
+  perModelCost: Record<string, number>,
+  dir: string,
+): void {
+  const s = readStats();
+  s.runs += 1;
+  s.mediaSeconds += rec.durationSec;
+  s.characters += rec.characters;
+  s.llmCalls += rec.llmCalls;
+  s.inputTokens += rec.inputTokens;
+  s.outputTokens += rec.outputTokens;
+  if (rec.costUsd !== null) s.costUsd += rec.costUsd;
+  for (const [model, usd] of Object.entries(perModelCost)) {
+    s.costByModel[model] = (s.costByModel[model] ?? 0) + usd;
+  }
+  const tModel = rec.models.transcribe;
+  if (tModel) s.runsByModel[tModel] = (s.runsByModel[tModel] ?? 0) + 1;
+  s.firstRun ??= rec.ts;
+  s.lastRun = rec.ts;
+  writeFileSync(join(dir, "stats.json"), JSON.stringify(s, null, 2));
 }
