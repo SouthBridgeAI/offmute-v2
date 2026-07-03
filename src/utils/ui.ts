@@ -39,12 +39,20 @@ function shimmer(text: string, now: number): string {
   let run = "";
   const flush = () => {
     if (!run) return;
-    out += runTier === 2 ? chalk.bold.whiteBright(run) : runTier === 1 ? chalk.white(run) : chalk.dim(run);
+    out +=
+      runTier === 2
+        ? chalk.bold.whiteBright(run)
+        : runTier === 1
+          ? chalk.white(run)
+          : chalk.dim(run);
     run = "";
   };
   for (let i = 0; i < chars.length; i++) {
     const dist = Math.abs(i + SHIMMER_PADDING - pos);
-    const intensity = dist >= SHIMMER_HALF_WIDTH ? 0 : 0.5 * (1 + Math.cos((Math.PI * dist) / SHIMMER_HALF_WIDTH));
+    const intensity =
+      dist >= SHIMMER_HALF_WIDTH
+        ? 0
+        : 0.5 * (1 + Math.cos((Math.PI * dist) / SHIMMER_HALF_WIDTH));
     const tier = intensity >= 0.65 ? 2 : intensity >= 0.2 ? 1 : 0;
     if (tier !== runTier) {
       flush();

@@ -59,7 +59,9 @@ function loadSource(path: string, opts: RenameOptions): Source {
   try {
     const src = JSON.parse(readFileSync(sourcePath, "utf-8")) as { signature?: string };
     if (src.signature && src.signature !== inputSignature(path)) {
-      console.error(`✗ the cached transcript is from an older version of ${basename(path)}`);
+      console.error(
+        `✗ the cached transcript is from an older version of ${basename(path)}`,
+      );
       console.error(`  re-run first:  offmute-v2 "${path}"`);
       process.exit(1);
     }
@@ -124,7 +126,9 @@ export function runRename(path: string, mappings: string[], opts: RenameOptions)
     const known = [
       ...new Set(result.speakers.flatMap((s) => [s.id, s.name]).filter(Boolean)),
     ].join(", ");
-    console.error(`✗ no speaker matched: ${missed.join(", ")}\n  known speakers: ${known}`);
+    console.error(
+      `✗ no speaker matched: ${missed.join(", ")}\n  known speakers: ${known}`,
+    );
     process.exit(1);
   }
 
@@ -158,7 +162,8 @@ export function runRename(path: string, mappings: string[], opts: RenameOptions)
     write(`${base}.md`, formatMarkdown(result, { title: base, mdStyle: opts.mdStyle }));
   if (formats.includes("srt")) write(`${base}.srt`, formatSrt(result, { title: base }));
   if (formats.includes("txt")) write(`${base}.txt`, formatText(result, { title: base }));
-  if (formats.includes("html")) write(`${base}.html`, formatHtml(result, { title: base }));
+  if (formats.includes("html"))
+    write(`${base}.html`, formatHtml(result, { title: base }));
   if (formats.includes("json") && jsonPath !== join(outDir, `${base}.json`)) {
     write(`${base}.json`, JSON.stringify(result, null, 2));
   }

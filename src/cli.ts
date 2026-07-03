@@ -379,7 +379,10 @@ program
   )
   .option("--formats <list>", "formats to regenerate", "md")
   .option("--md-style <style>", "markdown layout: merged | turns", "merged")
-  .option("-o, --output <dir>", "where to write regenerated files (default: next to the input)")
+  .option(
+    "-o, --output <dir>",
+    "where to write regenerated files (default: next to the input)",
+  )
   .option("-i, --intermediates <dir>", "cache dir override (if the run used -i)")
   .action(
     (

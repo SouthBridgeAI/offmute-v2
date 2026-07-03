@@ -22,13 +22,20 @@ npx offmute-v2@fable meeting.mp4
 
 ---
 
-Speech-to-text is a solved problem. *Meetings* are not: who said what, through interruptions,
+<div align="center">
+<img src="docs/assets/whos-speaking.png" alt='Iron Man: "Who&apos;s speaking?" — Ant-Man, inside the suit: "It&apos;s your conscience. We don&apos;t talk a lot these days."' width="420">
+
+*the eternal diarization problem. Tony had one unknown speaker and still needed help.*
+
+</div>
+
+Speech-to-text is a solved problem. _Meetings_ are not: who said what, through interruptions,
 across an hour, with names attached and timestamps you can trust. Every tool picks one half —
 ASR services nail the clock but garble the people; LLMs understand the people but
 [hallucinate the clock](#why-its-accurate). offmute-v2 runs both and fuses them, word by word.
 
 The result: **~8% word error rate, ~99% speaker attribution, sub-second turn boundaries** on
-hand-checked real recordings — with speakers identified *by name* from context alone, and every
+hand-checked real recordings — with speakers identified _by name_ from context alone, and every
 name verified by a second model before it ships.
 
 ## Quick start
@@ -86,16 +93,16 @@ and I study how the economics of building, scaling, and designing companies are 
 ```
 
 Same-speaker runs merge into readable paragraphs; tone shows up only when it matters
-(*(laughing)*, *(sarcastic)*) instead of decorating every line. One file by default; five formats
+(_(laughing)_, _(sarcastic)_) instead of decorating every line. One file by default; five formats
 when you want them:
 
-| format | what it's for |
-| ------ | ------------- |
-| `md` *(default)* | the transcript you actually read — merged paragraphs, `[mm:ss]` anchors |
-| `srt`  | subtitles — cue width capped, timing word-accurate, drop straight onto the video |
-| `html` | one self-contained shareable page — speaker colors, click-to-copy timestamps, no JS deps |
-| `txt`  | plain text for grepping and piping |
-| `json` | every segment with `start`/`end`, speaker, tone, confidence, word-level timings |
+| format           | what it's for                                                                            |
+| ---------------- | ---------------------------------------------------------------------------------------- |
+| `md` _(default)_ | the transcript you actually read — merged paragraphs, `[mm:ss]` anchors                  |
+| `srt`            | subtitles — cue width capped, timing word-accurate, drop straight onto the video         |
+| `html`           | one self-contained shareable page — speaker colors, click-to-copy timestamps, no JS deps |
+| `txt`            | plain text for grepping and piping                                                       |
+| `json`           | every segment with `start`/`end`, speaker, tone, confidence, word-level timings          |
 
 Add `--summary` for a `meeting.summary.md` with the TL;DR, decisions, and action items.
 
@@ -103,7 +110,7 @@ Add `--summary` for a `meeting.summary.md` with the TL;DR, decisions, and action
 
 Multimodal LLMs are the best diarizers in the world — they follow speakers through
 interruptions, infer names from "hey everybody, I'm Hanjun", and hear tone. They are also
-*hopeless* at time: left alone, Gemini's timestamps drift **minutes** over a long recording.
+_hopeless_ at time: left alone, Gemini's timestamps drift **minutes** over a long recording.
 ASR services are the mirror image: word timings accurate to centiseconds, but speakers as
 anonymous clusters and text that keeps every "um".
 
@@ -131,7 +138,7 @@ the seams that actually determine day-to-day quality:
   disagreement stays an honest `Speaker A` rather than becoming a confident guess. One person
   can never be two voices.
 - **Conversation partners never merge.** ASR diarizers over-split one voice into two clusters;
-  naive fixes merge them back by label — and fuse two *real people* when the LLM mislabels.
+  naive fixes merge them back by label — and fuse two _real people_ when the LLM mislabels.
   offmute-v2 checks the turn-taking pattern: clusters that alternate like a conversation are
   different humans, whatever the labels say.
 - **Mega-segments get split at voice boundaries.** When the LLM folds someone's interjection
@@ -139,7 +146,7 @@ the seams that actually determine day-to-day quality:
   split at the exact word.
 - **Chunk seams never double-print.** Segments are ownership-partitioned across chunk overlaps,
   and boundary-spanning duplicates are trimmed word-by-word.
-- **Nothing silently goes stale.** Every stage caches to disk, keyed on the input file *and* the
+- **Nothing silently goes stale.** Every stage caches to disk, keyed on the input file _and_ the
   config — change the model and the cache invalidates itself. Re-run for a new format and it's
   ~2 seconds and $0.00. Kill it mid-run and it resumes where it stopped.
 
@@ -191,22 +198,22 @@ name is left over and one voice unnamed, they bind by elimination.
 offmute-v2 <input> [options]      # transcribe (default command)
 ```
 
-| option | default | |
-| ------ | ------- | --- |
-| `-o, --output <dir>` | next to input | where transcripts land |
-| `--formats <list>` | `md` | any of `md,srt,txt,html,json` |
-| `--summary` | off | also write TL;DR / decisions / action items |
-| `--instructions <text>` | – | guide the ear: *"the host is Alice; spell it Xiao, not Shao"* |
-| `--speakers <names>` | – | who was in the room (helps naming; comma-separated) |
-| `--model <name>` | `gemini-3.1-pro-preview` | `gemini-3.5-flash` for ~4× cheaper/faster |
-| `--timestamped <p>` | `assemblyai` | `elevenlabs` (Scribe v2) · `whisper-groq` (free) · `none` |
-| `--reasoner <name>` | `deepseek-chat` | naming/summary model — DeepSeek, Gemini, GLM, Kimi, GPT, Claude |
-| `--level <1\|2\|3>` | `3` | 1 separation · 2 anonymous-consistent · 3 **verified names** |
-| `--identify <mode>` | `dual` | two reasoners + adjudication · `single` |
-| `--md-style <s>` | `merged` | merged paragraphs · `turns` for one block per turn |
-| `--chunk-seconds` / `--overlap-seconds` | `600` / `60` | chunking |
-| `--force` | – | ignore caches and recompute |
-| `-i <dir>` | OS temp, per input | cache location (printed each run) |
+| option                                  | default                  |                                                                 |
+| --------------------------------------- | ------------------------ | --------------------------------------------------------------- |
+| `-o, --output <dir>`                    | next to input            | where transcripts land                                          |
+| `--formats <list>`                      | `md`                     | any of `md,srt,txt,html,json`                                   |
+| `--summary`                             | off                      | also write TL;DR / decisions / action items                     |
+| `--instructions <text>`                 | –                        | guide the ear: _"the host is Alice; spell it Xiao, not Shao"_   |
+| `--speakers <names>`                    | –                        | who was in the room (helps naming; comma-separated)             |
+| `--model <name>`                        | `gemini-3.1-pro-preview` | `gemini-3.5-flash` for ~4× cheaper/faster                       |
+| `--timestamped <p>`                     | `assemblyai`             | `elevenlabs` (Scribe v2) · `whisper-groq` (free) · `none`       |
+| `--reasoner <name>`                     | `deepseek-chat`          | naming/summary model — DeepSeek, Gemini, GLM, Kimi, GPT, Claude |
+| `--level <1\|2\|3>`                     | `3`                      | 1 separation · 2 anonymous-consistent · 3 **verified names**    |
+| `--identify <mode>`                     | `dual`                   | two reasoners + adjudication · `single`                         |
+| `--md-style <s>`                        | `merged`                 | merged paragraphs · `turns` for one block per turn              |
+| `--chunk-seconds` / `--overlap-seconds` | `600` / `60`             | chunking                                                        |
+| `--force`                               | –                        | ignore caches and recompute                                     |
+| `-i <dir>`                              | OS temp, per input       | cache location (printed each run)                               |
 
 ```bash
 offmute-v2 watch <dir>       # daemon: transcribe files as they appear
