@@ -509,6 +509,9 @@ export async function transcribe(opts: PipelineOptions): Promise<TranscriptResul
     durationSec: number;
     hasDiarization?: boolean;
   } | null = null;
+  // Whether this run made a paid ASR call (cache hits and skipped passes cost nothing —
+  // the receipt and lifetime stats must not bill them).
+  let asrBilled = false;
   if (has(passes, "timestamped") || has(passes, "align")) {
     checkAbort();
     const provider = options.timestampedProvider ?? "assemblyai";
@@ -523,6 +526,7 @@ export async function transcribe(opts: PipelineOptions): Promise<TranscriptResul
       const buf = await readFile(audioPath);
       const groq = new WhisperGroqClient(keys.groq!);
       asrResult = await groq.transcribe(buf).catch(stageTag("asr"));
+      asrBilled = true;
       writeJson(`${options.intermediatesDir}/timestamped.json`, asrResult);
     } else if (provider === "elevenlabs") {
       logger.info("=== timestamped (ElevenLabs Scribe v2) ===");
@@ -536,6 +540,7 @@ export async function transcribe(opts: PipelineOptions): Promise<TranscriptResul
         const buf = await readFile(audioPath);
         const el = new ElevenLabsClient(keys.elevenlabs!);
         asrResult = await el.transcribe(buf).catch(stageTag("asr"));
+        asrBilled = true;
         writeJson(cachePath, asrResult);
       } else {
         logger.info("[elevenlabs] cache hit");
@@ -555,6 +560,7 @@ export async function transcribe(opts: PipelineOptions): Promise<TranscriptResul
         cacheDir: `${options.intermediatesDir}/assemblyai`,
       });
       asrResult = await aai.transcribe(audioPath).catch(stageTag("asr"));
+      asrBilled = !aai.lastFromCache;
       writeJson(`${options.intermediatesDir}/timestamped.json`, asrResult);
     }
   } else {
@@ -736,7 +742,7 @@ export async function transcribe(opts: PipelineOptions): Promise<TranscriptResul
   logger.info(`final segments: ${finalSegments.length}`);
 
   // ---------- 8. FORMAT + WRITE ----------
-  const receipt = computeReceipt(getLlmUsage(), tsProvider, duration);
+  const receipt = computeReceipt(getLlmUsage(), tsProvider, duration, asrBilled);
   const wallMs = Date.now() - runStartedAt;
   const metadata: TranscriptMetadata = {
     sourceFile: options.input,

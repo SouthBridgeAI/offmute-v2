@@ -77,6 +77,14 @@ describe("computeReceipt", () => {
     expect(receipt.perModel["gemini-3.5-flash"]).toBeGreaterThan(2);
     expect(receipt.incomplete).toBe(false);
   });
+
+  it("does not bill ASR when the timestamped result came from cache", () => {
+    // A re-run that hits the ASR cache pays nothing for ASR — the receipt (and the
+    // lifetime stats fed from it) must not claim otherwise.
+    const receipt = computeReceipt([], "assemblyai", 3600, false);
+    expect(receipt.asrUsd).toBe(0);
+    expect(receipt.totalUsd).toBe(0);
+  });
 });
 
 describe("asrCost", () => {

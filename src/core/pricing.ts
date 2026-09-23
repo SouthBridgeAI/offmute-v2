@@ -143,11 +143,13 @@ export interface CostReceipt {
   incomplete: boolean;
 }
 
-/** Compute the actual receipt from collected usage + ASR duration. */
+/** Compute the actual receipt from collected usage + ASR duration. `asrBilled` is false
+ * when this run's timestamped result came from cache — no ASR call was paid for. */
 export function computeReceipt(
   usage: LlmUsageRecord[],
   tsProvider: string,
   durationSec: number,
+  asrBilled = true,
 ): CostReceipt {
   let llmUsd = 0;
   let incomplete = false;
@@ -183,11 +185,12 @@ export function computeReceipt(
       `${model}: ${m.calls} call${m.calls > 1 ? "s" : ""} · ${fmtTok(m.in)} in / ${fmtTok(m.out)} out · $${usd.toFixed(2)}`,
     );
   }
-  const asrUsd = tsProvider === "none" ? 0 : asrCost(tsProvider, durationSec);
+  const asrUsd =
+    tsProvider === "none" || !asrBilled ? 0 : asrCost(tsProvider, durationSec);
   if (asrUsd !== null && tsProvider !== "none") {
     perModel[tsProvider] = asrUsd;
     lines.push(
-      `${tsProvider}: ${(durationSec / 60).toFixed(0)}min · $${asrUsd.toFixed(2)}`,
+      `${tsProvider}: ${(durationSec / 60).toFixed(0)}min · ${asrBilled ? `$${asrUsd.toFixed(2)}` : "cached · $0.00"}`,
     );
   }
   return {
