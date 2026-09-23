@@ -41,6 +41,15 @@ describe("configSignature (cache invalidation on option change)", () => {
       }),
     ).toBe(ref);
   });
+
+  it("is stable when only identify options change (they have their own cache)", () => {
+    // A naming-only change must not discard the transcription + ASR intermediates —
+    // field report 1: `--reasoner` alone re-transcribed three 1–1.5h recordings.
+    const ref = configSignature(base);
+    expect(configSignature({ ...base, reasoner: "claude-sonnet-4-5" })).toBe(ref);
+    expect(configSignature({ ...base, knownSpeakers: ["Priya", "Jay"] })).toBe(ref);
+    expect(configSignature({ ...base, identifyMode: "single" })).toBe(ref);
+  });
 });
 
 describe("deriveIntermediatesDir (defaults to OS temp dir)", () => {

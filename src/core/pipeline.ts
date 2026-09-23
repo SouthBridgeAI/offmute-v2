@@ -653,12 +653,14 @@ export async function transcribe(opts: PipelineOptions): Promise<TranscriptResul
       // Cached naming: a re-run (e.g. for another output format) reuses the verified
       // names instead of re-paying the reasoners. Cached only when it actually named
       // someone — an empty result usually means a transient failure worth retrying.
-      // The cache carries its own identify config: switching --identify mode or the
-      // reasoners invalidates just this stage, not the (expensive) transcription cache.
+      // The cache carries its own identify config: switching --identify mode, the
+      // reasoners, or --speakers invalidates just this stage, not the (expensive)
+      // transcription cache (configSignature deliberately excludes these options).
       const idConfig = {
         mode,
         reasonerA: reasonerA.info.model,
         reasonerB: reasonerB?.info.model ?? null,
+        knownSpeakers: options.knownSpeakers ?? [],
       };
       const idCachePath = `${options.intermediatesDir}/identified.json`;
       const cachedId = forceAll
