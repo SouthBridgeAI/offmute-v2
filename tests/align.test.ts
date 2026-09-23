@@ -113,6 +113,25 @@ describe("alignSegments", () => {
     const out = alignSegments([], [word("hi", 0, 1)]);
     expect(out).toHaveLength(0);
   });
+
+  it("keeps a segment's words inside its chunk's audio (no stretching over a hole)", () => {
+    // Field report 1: with the following chunk's text missing, a chunk's last segments
+    // matched scattered common words minutes later and stretched over the hole — hiding
+    // it from gap-fill. Words heard in a chunk spanning 0–10s cannot be at 150s.
+    const llm = [
+      { ...seg(1, 4, "we are focusing on one thing"), chunkStart: 0, chunkEnd: 10 },
+    ];
+    const asr = [
+      word("we", 1, 1.3),
+      word("are", 1.3, 1.6),
+      word("focusing", 1.6, 2.2),
+      word("the", 150, 150.2),
+      word("one", 150.2, 150.5),
+      word("thing", 150.5, 151),
+    ];
+    const [out] = alignSegments(llm, asr);
+    expect(out!.end).toBeLessThanOrEqual(12);
+  });
 });
 
 describe("partitionByOwnership", () => {

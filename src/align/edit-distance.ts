@@ -12,6 +12,11 @@ import { fuzzyEqual } from "./normalize.js";
 /** Minimal token shape needed for alignment (both Token and AsrToken satisfy it). */
 export interface AlignToken {
   norm: string;
+  /** LLM side: the audio window (seconds) the token was heard in. When set, the token
+   * may only match or substitute ASR words that start inside it. */
+  window?: { lo: number; hi: number };
+  /** ASR side: the word's start time (seconds). */
+  start?: number;
 }
 
 export type AlignOp =
@@ -30,8 +35,20 @@ export interface AlignResult {
 }
 
 const INDEL = 2;
+/** More than insert + delete (2·INDEL), so the DP never pairs tokens across windows. */
+const OUT_OF_WINDOW = { cost: 2 * INDEL + 1, fuzzy: false };
 
 function matchCost(a: AlignToken, b: AlignToken): { cost: number; fuzzy: boolean } {
+  // An LLM token can only be one of the words spoken in the audio it was transcribed
+  // from. Without this, substitution (cost = one indel) lets a token latch onto any word
+  // minutes away at no extra cost, stretching a segment across a hole the LLM never
+  // covered — which then hides that hole from gap-fill (field report 1).
+  if (
+    a.window &&
+    b.start !== undefined &&
+    (b.start < a.window.lo || b.start > a.window.hi)
+  )
+    return OUT_OF_WINDOW;
   if (a.norm === b.norm) return { cost: 0, fuzzy: false };
   if (fuzzyEqual(a.norm, b.norm)) return { cost: 1, fuzzy: true };
   return { cost: 2, fuzzy: false }; // substitute

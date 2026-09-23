@@ -34,6 +34,10 @@ export interface ParsedLlmSegment {
    * owned by the previous chunk. Segments whose center is before this are dropped to
    * avoid double-printing the overlap region. */
   trustedStart?: number;
+  /** Absolute audio range of the source chunk (set by the pipeline): the only audio
+   * this segment can have been heard in. Alignment keeps its words inside it. */
+  chunkStart?: number;
+  chunkEnd?: number;
 }
 
 export interface ChunkTranscriptionResult {

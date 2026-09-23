@@ -358,6 +358,8 @@ export async function transcribe(opts: PipelineOptions): Promise<TranscriptResul
       ...s,
       chunkIndex: chunk.index,
       trustedStart: chunk.trustedStart,
+      chunkStart: chunk.start,
+      chunkEnd: chunk.end,
     })),
   });
 
