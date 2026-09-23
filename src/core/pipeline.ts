@@ -589,10 +589,14 @@ export async function transcribe(opts: PipelineOptions): Promise<TranscriptResul
   // ---------- 5.5 GAP-FILL ----------
   // Recover content the LLM dropped: insert ASR fallback segments for uncovered speech.
   if (asrResult && (has(passes, "align") || has(passes, "consistency"))) {
-    const before = aligned.length;
     aligned = fillAsrGaps(aligned, asrResult.words, asrResult.utterances);
-    const added = aligned.length - before;
-    if (added) logger.info(`gap-filled ${added} ASR fallback segment(s)`);
+    // Only gap-fill produces "timestamped" segments (aligned.json predates this step).
+    const added = aligned.filter((a) => a.timingSource === "timestamped");
+    if (added.length) {
+      logger.info(
+        `gap-filled ${added.length} ASR fallback segment(s) (${added.reduce((n, a) => n + a.words.length, 0)} words)`,
+      );
+    }
   }
 
   // ---------- 5.6 SPLIT MIXED-VOICE SEGMENTS ----------
