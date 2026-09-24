@@ -52,6 +52,11 @@ import {
   type ParsedLlmSegment,
   type ChunkTranscriptionResult,
 } from "../transcribe/llm-transcribe.js";
+import { chunkGrounding } from "../transcribe/grounding.js";
+import {
+  DEGENERATE_COMPRESSION_RATIO,
+  maxCompressionRatio,
+} from "../transcribe/degeneration.js";
 import { alignSegments, type AlignedSegment } from "../align/aligner.js";
 import { fillAsrGaps } from "../align/fill-gaps.js";
 import { assignGlobalSpeakers } from "../diarize/consistency.js";
@@ -358,6 +363,8 @@ export async function transcribe(opts: PipelineOptions): Promise<TranscriptResul
       ...s,
       chunkIndex: chunk.index,
       trustedStart: chunk.trustedStart,
+      chunkStart: chunk.start,
+      chunkEnd: chunk.end,
     })),
   });
 
@@ -509,6 +516,9 @@ export async function transcribe(opts: PipelineOptions): Promise<TranscriptResul
     durationSec: number;
     hasDiarization?: boolean;
   } | null = null;
+  // Whether this run made a paid ASR call (cache hits and skipped passes cost nothing —
+  // the receipt and lifetime stats must not bill them).
+  let asrBilled = false;
   if (has(passes, "timestamped") || has(passes, "align")) {
     checkAbort();
     const provider = options.timestampedProvider ?? "assemblyai";
@@ -523,6 +533,7 @@ export async function transcribe(opts: PipelineOptions): Promise<TranscriptResul
       const buf = await readFile(audioPath);
       const groq = new WhisperGroqClient(keys.groq!);
       asrResult = await groq.transcribe(buf).catch(stageTag("asr"));
+      asrBilled = true;
       writeJson(`${options.intermediatesDir}/timestamped.json`, asrResult);
     } else if (provider === "elevenlabs") {
       logger.info("=== timestamped (ElevenLabs Scribe v2) ===");
@@ -536,6 +547,7 @@ export async function transcribe(opts: PipelineOptions): Promise<TranscriptResul
         const buf = await readFile(audioPath);
         const el = new ElevenLabsClient(keys.elevenlabs!);
         asrResult = await el.transcribe(buf).catch(stageTag("asr"));
+        asrBilled = true;
         writeJson(cachePath, asrResult);
       } else {
         logger.info("[elevenlabs] cache hit");
@@ -555,12 +567,51 @@ export async function transcribe(opts: PipelineOptions): Promise<TranscriptResul
         cacheDir: `${options.intermediatesDir}/assemblyai`,
       });
       asrResult = await aai.transcribe(audioPath).catch(stageTag("asr"));
+      asrBilled = !aai.lastFromCache;
       writeJson(`${options.intermediatesDir}/timestamped.json`, asrResult);
     }
   } else {
     asrResult = forceAll
       ? null
       : readJson(`${options.intermediatesDir}/timestamped.json`);
+  }
+
+  // ---------- 4.5 DROP UNRELIABLE CHUNKS ----------
+  // Two transcription failures otherwise ship as confident text; both are better replaced
+  // by what the ASR actually heard (gap-fill below refills the range from ASR words):
+  //  - a repetition loop that survived every retry, and
+  //  - text the ASR can't corroborate at all — a conversation invented over faint or
+  //    background speech (see grounding.ts).
+  // Recomputed from the segments (cheap) rather than trusted from the cached validation,
+  // so caches written before these checks existed are covered too.
+  if (asrResult?.words.length && (has(passes, "align") || has(passes, "consistency"))) {
+    const dropped = new Set<number>();
+    for (const r of llmChunkResults) {
+      const idx = r.segments[0]?.chunkIndex;
+      const plan = chunks.find((c) => c.index === idx);
+      if (idx === undefined || !plan) continue;
+      const where = `chunk ${idx} [${plan.start.toFixed(0)}-${plan.end.toFixed(0)}]s`;
+      const compression = maxCompressionRatio(r.segments.map((s) => s.text).join(" "));
+      if (compression > DEGENERATE_COMPRESSION_RATIO) {
+        dropped.add(idx);
+        logger.warn(
+          `${where}: dropping repetition-loop text (compression ratio ${compression.toFixed(1)}) — ASR will fill this range`,
+        );
+        continue;
+      }
+      const g = chunkGrounding(r.segments, asrResult.words, plan.start, plan.end);
+      if (!g.grounded) {
+        dropped.add(idx);
+        logger.warn(
+          `${where}: dropping text the audio doesn't support (${Math.round(g.precision * 100)}% of ${g.llmTokens} content words heard by ASR) — ASR will fill this range`,
+        );
+      }
+    }
+    if (dropped.size) {
+      allLlmSegments = allLlmSegments.filter(
+        (s) => s.chunkIndex === undefined || !dropped.has(s.chunkIndex),
+      );
+    }
   }
 
   // ---------- 5. ALIGN ----------
@@ -581,10 +632,14 @@ export async function transcribe(opts: PipelineOptions): Promise<TranscriptResul
   // ---------- 5.5 GAP-FILL ----------
   // Recover content the LLM dropped: insert ASR fallback segments for uncovered speech.
   if (asrResult && (has(passes, "align") || has(passes, "consistency"))) {
-    const before = aligned.length;
     aligned = fillAsrGaps(aligned, asrResult.words, asrResult.utterances);
-    const added = aligned.length - before;
-    if (added) logger.info(`gap-filled ${added} ASR fallback segment(s)`);
+    // Only gap-fill produces "timestamped" segments (aligned.json predates this step).
+    const added = aligned.filter((a) => a.timingSource === "timestamped");
+    if (added.length) {
+      logger.info(
+        `gap-filled ${added.length} ASR fallback segment(s) (${added.reduce((n, a) => n + a.words.length, 0)} words)`,
+      );
+    }
   }
 
   // ---------- 5.6 SPLIT MIXED-VOICE SEGMENTS ----------
@@ -653,12 +708,14 @@ export async function transcribe(opts: PipelineOptions): Promise<TranscriptResul
       // Cached naming: a re-run (e.g. for another output format) reuses the verified
       // names instead of re-paying the reasoners. Cached only when it actually named
       // someone — an empty result usually means a transient failure worth retrying.
-      // The cache carries its own identify config: switching --identify mode or the
-      // reasoners invalidates just this stage, not the (expensive) transcription cache.
+      // The cache carries its own identify config: switching --identify mode, the
+      // reasoners, or --speakers invalidates just this stage, not the (expensive)
+      // transcription cache (configSignature deliberately excludes these options).
       const idConfig = {
         mode,
         reasonerA: reasonerA.info.model,
         reasonerB: reasonerB?.info.model ?? null,
+        knownSpeakers: options.knownSpeakers ?? [],
       };
       const idCachePath = `${options.intermediatesDir}/identified.json`;
       const cachedId = forceAll
@@ -734,7 +791,7 @@ export async function transcribe(opts: PipelineOptions): Promise<TranscriptResul
   logger.info(`final segments: ${finalSegments.length}`);
 
   // ---------- 8. FORMAT + WRITE ----------
-  const receipt = computeReceipt(getLlmUsage(), tsProvider, duration);
+  const receipt = computeReceipt(getLlmUsage(), tsProvider, duration, asrBilled);
   const wallMs = Date.now() - runStartedAt;
   const metadata: TranscriptMetadata = {
     sourceFile: options.input,

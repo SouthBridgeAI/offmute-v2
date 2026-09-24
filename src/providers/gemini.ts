@@ -5,7 +5,12 @@
  * Uses `@google/genai` v1 SDK. Audio is uploaded via the Files API (supports large
  * files) and referenced by URI in the generate request.
  */
-import { GoogleGenAI, type File, type Part } from "@google/genai";
+import {
+  GoogleGenAI,
+  type File,
+  type GenerateContentResponseUsageMetadata,
+  type Part,
+} from "@google/genai";
 import { basename } from "node:path";
 import { logger } from "../utils/logger.js";
 import { logLlmCall } from "./llm-log.js";
@@ -35,6 +40,11 @@ export interface GeminiGenerateOptions {
   logKind?: string;
   /** Chunk index (logged, for transcription calls). */
   logChunk?: number;
+  /** Checked against the accumulated text while the response streams; return a reason
+   * to abort (e.g. a degenerate repetition loop). The call then fails fast with
+   * `aborted: <reason>` instead of running to maxOutputTokens, and is NOT retried here —
+   * repeating the identical request would likely loop again; the caller decides. */
+  shouldAbort?: (textSoFar: string) => string | null;
 }
 
 export interface GeminiResult {
@@ -186,21 +196,40 @@ export class GeminiClient {
       for (let attempt = 0; attempt < maxRetries; attempt++) {
         const t0 = Date.now();
         try {
-          const response = await this.ai.models.generateContent({
+          // Streamed so the connection never sits silent: a non-streaming call sends no
+          // response headers until generation finishes, and Node's fetch (undici) fails any
+          // request whose headers take longer than 300s ("fetch failed") — long chunks and
+          // runaway generations died there and were retried from scratch (field report 1).
+          const controller = new AbortController();
+          const stream = await this.ai.models.generateContentStream({
             model,
             contents: [{ role: "user", parts }],
-            config,
+            config: { ...config, abortSignal: controller.signal },
           });
-          const usage = response.usageMetadata || {};
-          const text = response.text ?? "";
-          const result = {
-            text,
-            usage: {
-              inputTokens: usage.promptTokenCount ?? 0,
-              outputTokens: usage.candidatesTokenCount ?? 0,
-              totalTokens: usage.totalTokenCount ?? 0,
-            },
+          let text = "";
+          let usageMeta: GenerateContentResponseUsageMetadata | undefined;
+          let abortReason: string | null = null;
+          for await (const chunk of stream) {
+            text += chunk.text ?? "";
+            if (chunk.usageMetadata) usageMeta = chunk.usageMetadata;
+            abortReason = opts.shouldAbort?.(text) ?? null;
+            if (abortReason) {
+              controller.abort();
+              break;
+            }
+          }
+          const usage = {
+            inputTokens: usageMeta?.promptTokenCount ?? 0,
+            outputTokens: usageMeta?.candidatesTokenCount ?? 0,
+            totalTokens: usageMeta?.totalTokenCount ?? 0,
           };
+          const error = abortReason ? `aborted: ${abortReason}` : undefined;
+          if (error) {
+            logger.warn(
+              `[gemini] ${opts.logKind ?? "call"}${opts.logChunk !== undefined ? ` chunk ${opts.logChunk}` : ""} ${error} after ${text.length} chars`,
+            );
+          }
+          // Usage is logged for aborted calls too: the tokens streamed so far were paid for.
           logLlmCall({
             ts: new Date(t0).toISOString(),
             provider: "gemini",
@@ -209,11 +238,12 @@ export class GeminiClient {
             chunk: opts.logChunk,
             prompt,
             response: text,
-            usage: result.usage,
+            usage,
             durationMs: Date.now() - t0,
             attempt: attempt + 1,
+            ...(error ? { error } : {}),
           });
-          return result;
+          return error ? { text, usage, error } : { text, usage };
         } catch (err) {
           lastError = err instanceof Error ? err.message : String(err);
           // If the model rejected our thinking config, drop it for all subsequent attempts

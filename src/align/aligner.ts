@@ -52,7 +52,11 @@ interface LlmTok {
   original: string;
   norm: string;
   segIdx: number;
+  window?: { lo: number; hi: number };
 }
+
+/** Slack around a chunk's audio range for words straddling its boundary (seconds). */
+const WINDOW_SLACK_SEC = 2;
 
 function toAsrTokens(words: TimestampedWord[]): AsrTok[] {
   return words.map((w) => ({
@@ -142,7 +146,13 @@ export function alignSegments(
   for (const { s, i } of sorted) {
     const toks = tokenize(s.text);
     const start = flat.length;
-    for (const t of toks) flat.push({ original: t.original, norm: t.norm, segIdx: i });
+    // A segment's words can only be in the audio it was transcribed from.
+    const window =
+      s.chunkStart !== undefined && s.chunkEnd !== undefined
+        ? { lo: s.chunkStart - WINDOW_SLACK_SEC, hi: s.chunkEnd + WINDOW_SLACK_SEC }
+        : undefined;
+    for (const t of toks)
+      flat.push({ original: t.original, norm: t.norm, segIdx: i, window });
     segRanges.push({ src: i, start, end: flat.length });
   }
 

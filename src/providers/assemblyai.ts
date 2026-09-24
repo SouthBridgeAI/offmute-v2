@@ -61,14 +61,18 @@ export class AssemblyAIProvider {
 
   private speechModel: SpeechModel;
   private speakersExpected?: number;
+  /** Whether the last transcribe() was served from the content-hash cache (no paid call). */
+  lastFromCache = false;
 
   /** Transcribe a local audio file. Returns cached result if available. */
   async transcribe(filePath: string): Promise<AssemblyAIResult> {
     const hash = await fileHash(filePath);
     const cachePath = this.cacheDir ? `${this.cacheDir}/${hash}.json` : undefined;
 
+    this.lastFromCache = false;
     if (cachePath && existsSync(cachePath)) {
       logger.info(`[assemblyai] cache hit ${hash}`);
+      this.lastFromCache = true;
       return JSON.parse(await readFile(cachePath, "utf-8")) as AssemblyAIResult;
     }
 

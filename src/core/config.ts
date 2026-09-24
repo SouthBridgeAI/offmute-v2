@@ -278,13 +278,16 @@ export function inputSignature(input: string): string {
  * serve the previous config's output (e.g. switching to a `pro` model but getting the
  * `flash` transcript back). Options that don't affect intermediates (formats, outputDir,
  * concurrency, logging) are deliberately excluded so they don't trigger needless reruns.
+ *
+ * Identify-only options (`reasoner`, `knownSpeakers`, `identifyMode`) are excluded too:
+ * they never reach the describe / transcribe / ASR stages, and the identify stage keys
+ * its own cache on them (`identified.json` → `config`). Including them here made a
+ * naming-only change (e.g. `--reasoner claude-sonnet-4-5`) re-transcribe everything.
  */
 export function configSignature(o: PipelineOptions): string {
   const relevant = {
     model: o.model ?? DEFAULT_TRANSCRIBE_MODEL,
-    reasoner: o.reasoner ?? DEFAULT_REASONER_MODEL,
     instructions: o.instructions ?? "",
-    knownSpeakers: o.knownSpeakers ?? [],
     chunkDurationSec: o.chunkDurationSec ?? 600,
     chunkOverlapSec: o.chunkOverlapSec ?? 60,
     screenshotCount: o.screenshotCount ?? 6,

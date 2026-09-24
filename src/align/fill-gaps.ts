@@ -1,8 +1,11 @@
 /**
  * Gap-fill: after alignment, recover content the LLM dropped. Where ASR has speech in a
- * time gap not covered by any LLM segment (e.g. a dropped opening word like "GPU"), insert
- * an ASR-derived fallback segment (timingSource "timestamped"). Skips gaps already covered
- * by an adjacent segment's *text* (timing imprecision, not a real drop) to avoid duplicates.
+ * time range no LLM segment covers — before the first segment (a dropped opening word
+ * like "GPU"), between segments, or after the last one (a final chunk the LLM stopped
+ * transcribing early) — insert ASR-derived fallback segments (timingSource "timestamped"),
+ * one per ASR utterance so the speaker turns inside a long recovered range survive.
+ * Skips gaps already covered by the following segment's *text* (timing imprecision, not
+ * a real drop) to avoid duplicates.
  */
 import type { AlignedSegment } from "./aligner.js";
 import type { TimestampedWord, TimestampedUtterance } from "../core/types.js";
@@ -15,6 +18,41 @@ function normSet(text: string): Set<string> {
   return new Set(tokenize(text).map((t) => t.norm));
 }
 
+/** Index of the utterance containing time `t` (utterances sorted by start), or -1. */
+function utteranceAt(utts: TimestampedUtterance[], t: number): number {
+  let lo = 0;
+  let hi = utts.length - 1;
+  let found = -1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (utts[mid]!.start <= t) {
+      found = mid;
+      lo = mid + 1;
+    } else {
+      hi = mid - 1;
+    }
+  }
+  return found >= 0 && t <= utts[found]!.end ? found : -1;
+}
+
+/** ASR speaker with the most time overlapping [start, end]. */
+function dominantSpeaker(
+  utts: TimestampedUtterance[],
+  start: number,
+  end: number,
+): string {
+  let best = utts[0]?.speaker || "speaker_?";
+  let bestOv = 0;
+  for (const u of utts) {
+    const ov = Math.max(0, Math.min(end, u.end) - Math.max(start, u.start));
+    if (ov > bestOv) {
+      bestOv = ov;
+      best = u.speaker;
+    }
+  }
+  return best;
+}
+
 export function fillAsrGaps(
   segments: AlignedSegment[],
   asrWords: TimestampedWord[],
@@ -22,18 +60,23 @@ export function fillAsrGaps(
 ): AlignedSegment[] {
   if (!asrWords.length) return segments;
   const sorted = [...segments].sort((a, b) => a.start - b.start);
+  const utts = [...asrUtterances].sort((a, b) => a.start - b.start);
 
-  // Build gap ranges [start, end] not covered by any segment, before/between segments
-  // (not after the last — trailing silence isn't dropped content).
+  // Uncovered ranges: before the first segment, between segments (measured against the
+  // running max end, so a short segment nested inside a long one can't open a phantom
+  // gap), and after the last segment. Trailing silence has no ASR words, so the trailing
+  // range only ever fills real speech — e.g. a final chunk the LLM truncated.
   const ranges: Array<[number, number, AlignedSegment | undefined]> = [];
-  const firstStart = sorted.length
-    ? sorted[0]!.start
-    : asrWords[asrWords.length - 1]!.end;
-  if (firstStart > 0) ranges.push([0, firstStart, sorted[0]]);
-  for (let i = 0; i < sorted.length - 1; i++) {
-    const cur = sorted[i]!;
-    const next = sorted[i + 1]!;
-    if (next.start > cur.end) ranges.push([cur.end, next.start, next]);
+  if (!sorted.length) {
+    ranges.push([0, Infinity, undefined]);
+  } else {
+    if (sorted[0]!.start > 0) ranges.push([0, sorted[0]!.start, sorted[0]]);
+    let coveredTo = sorted[0]!.end;
+    for (const next of sorted.slice(1)) {
+      if (next.start > coveredTo) ranges.push([coveredTo, next.start, next]);
+      coveredTo = Math.max(coveredTo, next.end);
+    }
+    ranges.push([coveredTo, Infinity, undefined]);
   }
 
   const filled: AlignedSegment[] = [];
@@ -54,33 +97,42 @@ export function fillAsrGaps(
       if (covered / gapNorms.filter(Boolean).length >= 0.6) continue;
     }
 
-    // Dominant ASR utterance speaker in the gap.
-    let bestSp = asrUtterances[0]?.speaker || "speaker_?";
-    let bestOv = 0;
-    for (const u of asrUtterances) {
-      const ov = Math.max(0, Math.min(ge, u.end) - Math.max(gs, u.start));
-      if (ov > bestOv) {
-        bestOv = ov;
-        bestSp = u.speaker;
+    // One fallback segment per ASR utterance: a long recovered range is a conversation,
+    // not one speaker's monologue. Words outside any utterance stay with their neighbors.
+    const runs: { words: TimestampedWord[]; utt: number }[] = [];
+    for (const w of words) {
+      const u = utteranceAt(utts, w.start);
+      const cur = runs[runs.length - 1];
+      if (cur && (u === -1 || u === cur.utt || cur.utt === -1)) {
+        cur.words.push(w);
+        if (cur.utt === -1) cur.utt = u;
+      } else {
+        runs.push({ words: [w], utt: u });
       }
     }
-
-    filled.push({
-      speaker: bestSp,
-      start: words[0]!.start,
-      end: words[words.length - 1]!.end,
-      text: words.map((w) => w.text).join(" "),
-      tone: [],
-      confidence: 0,
-      timingSource: "timestamped",
-      words: words.map((w) => ({
-        text: w.text,
-        start: w.start,
-        end: w.end,
-        matched: true,
-      })),
-      sourceIndex: -1,
-    });
+    for (const run of runs) {
+      const first = run.words[0]!;
+      const last = run.words[run.words.length - 1]!;
+      filled.push({
+        speaker:
+          run.utt >= 0
+            ? utts[run.utt]!.speaker
+            : dominantSpeaker(utts, first.start, last.end),
+        start: first.start,
+        end: last.end,
+        text: run.words.map((w) => w.text).join(" "),
+        tone: [],
+        confidence: 0,
+        timingSource: "timestamped",
+        words: run.words.map((w) => ({
+          text: w.text,
+          start: w.start,
+          end: w.end,
+          matched: true,
+        })),
+        sourceIndex: -1,
+      });
+    }
   }
 
   if (!filled.length) return sorted;
