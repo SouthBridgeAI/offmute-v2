@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { estimateRunCost, computeReceipt, asrCost } from "../src/core/pricing.js";
+import { estimateRunCost, computeReceipt, asrCost, priceFor } from "../src/core/pricing.js";
+import { usageFromMetadata } from "../src/providers/gemini-usage.js";
 
 describe("estimateRunCost", () => {
   it("estimates a 47-minute default run in a sane range", () => {
@@ -44,17 +45,54 @@ describe("estimateRunCost", () => {
   });
 });
 
+describe("priceFor", () => {
+  it("prices a dated variant by the longest id it starts with", () => {
+    // "gemini-2.5-flash-lite-…" also starts with "gemini-2.5-flash" (3× the input price).
+    const lite = priceFor("gemini-2.5-flash-lite-preview-09-2025")!;
+    expect(lite).toEqual(priceFor("gemini-2.5-flash-lite"));
+  });
+
+  it("switches a model to its announced price on the announced day", () => {
+    const before = priceFor("gemini-4-argon", new Date("2026-11-30T23:00:00Z"))!;
+    const after = priceFor("gemini-4-argon", new Date("2026-12-01T00:00:00Z"))!;
+    expect(after.out).toBe(before.out * 2);
+    expect(after.textIn).toBe(before.textIn * 2);
+  });
+});
+
+describe("usageFromMetadata", () => {
+  it("bills thinking tokens as output", () => {
+    const u = usageFromMetadata({
+      promptTokenCount: 15_000,
+      candidatesTokenCount: 6_000,
+      thoughtsTokenCount: 4_000,
+      totalTokenCount: 25_000,
+    });
+    expect(u.outputTokens).toBe(10_000);
+    expect(u.thoughtTokens).toBe(4_000);
+  });
+});
+
 describe("computeReceipt", () => {
   it("aggregates usage per model and adds ASR", () => {
     const receipt = computeReceipt(
       [
         {
           provider: "gemini",
-          model: "gemini-3.5-flash",
+          model: "gemini-3.1-pro-preview",
           kind: "transcribe",
-          inputTokens: 1_000_000,
-          outputTokens: 100_000,
-          calls: 4,
+          inputTokens: 600_000,
+          outputTokens: 60_000,
+          calls: 3,
+          errors: 0,
+        },
+        {
+          provider: "gemini",
+          model: "gemini-3.1-pro-preview",
+          kind: "transcribe",
+          inputTokens: 400_000,
+          outputTokens: 40_000,
+          calls: 1,
           errors: 0,
         },
         {
@@ -70,11 +108,14 @@ describe("computeReceipt", () => {
       "assemblyai",
       3600,
     );
-    // 1M @ $1.50 + 100k @ $9 = 1.5 + 0.9 = 2.4; deepseek pennies; asr 0.15
-    expect(receipt.llmUsd).toBeCloseTo(2.4 + 0.0032, 1);
-    expect(receipt.asrUsd).toBeCloseTo(0.15, 5);
+    const pro = priceFor("gemini-3.1-pro-preview")!;
+    const ds = priceFor("deepseek-chat")!;
+    const proUsd = (1_000_000 * pro.textIn + 100_000 * pro.out) / 1e6;
+    const dsUsd = (10_000 * ds.textIn + 1_000 * ds.out) / 1e6;
+    expect(receipt.perModel["gemini-3.1-pro-preview"]).toBeCloseTo(proUsd, 6);
+    expect(receipt.llmUsd).toBeCloseTo(proUsd + dsUsd, 6);
+    expect(receipt.asrUsd).toBeCloseTo(asrCost("assemblyai", 3600)!, 6);
     expect(receipt.totals.calls).toBe(5);
-    expect(receipt.perModel["gemini-3.5-flash"]).toBeGreaterThan(2);
     expect(receipt.incomplete).toBe(false);
   });
 

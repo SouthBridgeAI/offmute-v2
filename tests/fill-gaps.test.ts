@@ -59,6 +59,17 @@ describe("fillAsrGaps", () => {
     expect(out.length).toBe(1);
   });
 
+  it("fills a real gap even when a long following turn uses the same common words", () => {
+    // Real case: 12 words lost after a chunk hand-over were "covered" by a 922-word turn
+    // that started 10 s later, because that turn contains most common words somewhere.
+    const longTurn = `We've had that internal discussion about pricing, budgets and timelines for this whole project. ${"And so we want to know what you think about it all. ".repeat(40)}`;
+    const segs = [seg(0, 2, "Before the gap"), seg(14, 300, longTurn)];
+    const gap = "so what we want to know is what you think".split(" ");
+    const asr = gap.map((w, k) => word(w, 3 + k, 3.5 + k));
+    const out = fillAsrGaps(segs, asr, [utt(3, 13, "speaker_A")]);
+    expect(out.filter((s) => s.timingSource === "timestamped")).toHaveLength(1);
+  });
+
   it("skips narrow gaps below the threshold", () => {
     const segs = [seg(0, 1.0, "hello"), seg(1.3, 2.0, "world")]; // 0.3s gap
     const asr = [word("hello", 0, 1.0), word("world", 1.3, 2.0)];

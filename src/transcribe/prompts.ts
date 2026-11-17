@@ -59,8 +59,10 @@ export interface ChunkContext {
   description?: string;
   /** Speaker roster / hints. */
   roster?: string;
-  /** Tail of the previous chunk's transcript for continuity (last few segments). */
-  previousTail?: string;
+  // No previous-chunk tail: chunks overlap by design, so "continue from here, don't repeat
+  // this" contradicts the audio the model hears. It only ever arrived from a stale cache
+  // (re-runs, or a concurrently finished chunk), and with it 3.1 Pro looped on 2 of 4
+  // attempts at a chunk where it looped on 0 of 4 without it (lab/bakeoff, Nov 2026).
   /** Chunk index (1-based) and total. */
   index: number;
   total: number;
@@ -123,13 +125,6 @@ export function transcriptionPrompt(ctx: ChunkContext): string {
     parts.push(
       "Use a roster name ONLY when the voice itself tells you it's that person (they self-identify, are addressed by name, or the voice description clearly matches). If two speakers sound similar and you are not sure which name belongs to which voice, use 'Speaker A' / 'Speaker B' instead — a WRONG name is much worse than a generic label; a later pass verifies names.",
     );
-  }
-  if (ctx.previousTail) {
-    parts.push("");
-    parts.push(
-      "TRANSCRIPT OF THE END OF THE PREVIOUS CHUNK (for continuity — do NOT repeat this content, continue from where it leaves off):",
-    );
-    parts.push(ctx.previousTail);
   }
   if (ctx.instructions) {
     parts.push("");

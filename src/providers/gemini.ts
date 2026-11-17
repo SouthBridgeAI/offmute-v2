@@ -15,16 +15,13 @@ import { basename } from "node:path";
 import { logger } from "../utils/logger.js";
 import { logLlmCall } from "./llm-log.js";
 import { withRetry } from "../utils/retry.js";
+import { usageFromMetadata, type GeminiUsage } from "./gemini-usage.js";
+
+export type { GeminiUsage };
 
 export interface GeminiFileInput {
   path: string;
   mimeType?: string;
-}
-
-export interface GeminiUsage {
-  inputTokens: number;
-  outputTokens: number;
-  totalTokens: number;
 }
 
 export interface GeminiGenerateOptions {
@@ -92,6 +89,8 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
  * Per-model "thinking" configuration. The control is NOT uniform across the Gemini family,
  * and the wrong/default level makes some models (esp. 3.x **pro**) over-think long audio —
  * e.g. ~7x slower for transcription, which doesn't benefit from heavy reasoning. We tame it:
+ *  - gemini-4-*    → `thinkingLevel: LOW`, the lowest Gemini 4 accepts (it rejects MINIMAL and
+ *                    cannot turn thinking off; its defaults are MEDIUM, or HIGH on Hydrogen)
  *  - gemini-2.5-*  → `thinkingBudget` (flash can disable with 0; pro can't fully disable → 128)
  *  - gemini-3.x / *-latest → `thinkingLevel` (pro can't take MINIMAL → floor to LOW; flash MINIMAL)
  *  - gemini-2.0-*  → no thinking control
@@ -100,6 +99,7 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 export function resolveThinking(model: string): Record<string, unknown> | undefined {
   const m = model.toLowerCase();
   if (m.includes("gemini-2.0")) return undefined;
+  if (m.includes("gemini-4")) return { thinkingLevel: "LOW" };
   if (m.includes("gemini-2.5")) {
     return { thinkingBudget: m.includes("pro") ? 128 : 0 };
   }
@@ -109,6 +109,15 @@ export function resolveThinking(model: string): Record<string, unknown> | undefi
     return { thinkingLevel: m.includes("pro") ? "LOW" : "MINIMAL" };
   }
   return undefined;
+}
+
+/** The thinking config to retry with after a model rejected `rejected`: MINIMAL steps up
+ * to LOW (a moving alias may now point at a model whose floor is LOW); anything else is
+ * dropped, leaving the model's default. */
+export function fallbackThinking(
+  rejected: Record<string, unknown>,
+): Record<string, unknown> | undefined {
+  return rejected.thinkingLevel === "MINIMAL" ? { thinkingLevel: "LOW" } : undefined;
 }
 
 /** Whether an error message looks like the model rejected our thinking config. */
@@ -184,7 +193,7 @@ export class GeminiClient {
       if (systemInstruction) config.systemInstruction = systemInstruction;
       // Tame per-model thinking (keeps pro fast for transcription). Dropped automatically
       // if a model rejects it (see the catch below).
-      const thinking = resolveThinking(model);
+      let thinking = resolveThinking(model);
       if (thinking) config.thinkingConfig = thinking;
 
       const parts: Part[] = uploaded.map((f) => ({
@@ -218,11 +227,7 @@ export class GeminiClient {
               break;
             }
           }
-          const usage = {
-            inputTokens: usageMeta?.promptTokenCount ?? 0,
-            outputTokens: usageMeta?.candidatesTokenCount ?? 0,
-            totalTokens: usageMeta?.totalTokenCount ?? 0,
-          };
+          const usage = usageFromMetadata(usageMeta);
           const error = abortReason ? `aborted: ${abortReason}` : undefined;
           if (error) {
             logger.warn(
@@ -246,13 +251,16 @@ export class GeminiClient {
           return error ? { text, usage, error } : { text, usage };
         } catch (err) {
           lastError = err instanceof Error ? err.message : String(err);
-          // If the model rejected our thinking config, drop it for all subsequent attempts
-          // and retry (the next attempt then runs without any thinkingConfig).
-          if (config.thinkingConfig && isThinkingConfigError(lastError)) {
-            delete config.thinkingConfig;
+          // If the model rejected our thinking config, step it up (MINIMAL → LOW) or drop
+          // it for all subsequent attempts, and retry.
+          if (thinking && isThinkingConfigError(lastError)) {
+            const next = fallbackThinking(thinking);
             logger.warn(
-              `[gemini] model ${model} rejected thinking config — retrying without it`,
+              `[gemini] model ${model} rejected thinking config ${JSON.stringify(thinking)} — retrying ${next ? `with ${JSON.stringify(next)}` : "without it"}`,
             );
+            thinking = next;
+            if (thinking) config.thinkingConfig = thinking;
+            else delete config.thinkingConfig;
             continue;
           }
           logger.warn(

@@ -111,4 +111,32 @@ export interface TranscriptMetadata {
     inputTokens: number;
     outputTokens: number;
   };
+  /** How much of the recording the LLM transcript covered, chunk by chunk, and what was
+   * done where it didn't. "Every run reported success" was true of runs that silently
+   * lost minutes; this says where text came from the ASR instead. */
+  quality?: TranscriptQuality;
+}
+
+/** One LLM chunk's coverage against the ASR. */
+export interface ChunkQuality {
+  chunk: number;
+  start: number;
+  end: number;
+  /** ok · retried (re-transcribed in halves, now fine) · low-coverage (still short after any
+   * retry; the ASR filled what it could) · dropped-loop (a repetition loop, replaced by ASR) */
+  status: "ok" | "retried" | "low-coverage" | "dropped-loop";
+  /** Transcript words per ASR word (null when the ASR heard nothing here). */
+  coverage: number | null;
+  llmWords: number;
+  asrWords: number;
+  /** Few of its content words were also heard by the ASR (flagged, kept as transcribed). */
+  ungrounded?: boolean;
+}
+
+export interface TranscriptQuality {
+  chunks: ChunkQuality[];
+  /** Words inserted from the ASR where no transcript segment covered its speech. */
+  gapFilledWords: number;
+  /** The ASR heard far fewer words than the transcript holds (often: another language). */
+  asrMissedSpeech: boolean;
 }

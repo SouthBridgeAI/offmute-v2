@@ -5,7 +5,8 @@
  * Every stage persists intermediates to disk and is resumable (skips work whose
  * output already exists unless `force`). Stoppable: results so far are always on disk.
  */
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import {
   resolveKeys,
   resolveOptions,
@@ -27,6 +28,7 @@ import type {
   TimestampedWord,
   TimestampedUtterance,
   ChunkPlan,
+  ChunkQuality,
 } from "./types.js";
 import {
   checkFfmpeg,
@@ -53,11 +55,13 @@ import {
   type ChunkTranscriptionResult,
 } from "../transcribe/llm-transcribe.js";
 import { chunkGrounding } from "../transcribe/grounding.js";
+import { chunkCoverage } from "../transcribe/coverage.js";
+import { transcribeInHalves } from "./retranscribe.js";
 import {
   DEGENERATE_COMPRESSION_RATIO,
   maxCompressionRatio,
 } from "../transcribe/degeneration.js";
-import { alignSegments, type AlignedSegment } from "../align/aligner.js";
+import { alignSegments, toAsrClock, type AlignedSegment } from "../align/aligner.js";
 import { fillAsrGaps } from "../align/fill-gaps.js";
 import { assignGlobalSpeakers } from "../diarize/consistency.js";
 import { splitMixedVoiceSegments } from "../diarize/split-mixed.js";
@@ -68,6 +72,7 @@ import { formatSrt, formatMarkdown, formatText, formatJson } from "../finalize/f
 import { formatHtml } from "../finalize/html.js";
 import { summarizeTranscript } from "../finalize/summary.js";
 import { basename, resolve } from "node:path";
+import { createHash } from "node:crypto";
 
 const JSON_OPTS = { encoding: "utf-8" } as const;
 
@@ -270,6 +275,76 @@ export async function transcribe(opts: PipelineOptions): Promise<TranscriptResul
     `estimated cost ~$${estimate.totalUsd.toFixed(2)}${estimate.incomplete ? " (+unpriced parts)" : ""}  [${estimate.lines.join(" · ")}]`,
   );
 
+  // ---------- 2. TIMESTAMPED (started now; awaited after transcription) ----------
+  // The ASR needs only the audio, so it runs alongside describe and the LLM chunks. That
+  // hides its latency, and its words are what each chunk's coverage is checked against
+  // (step 4.1) while the transcription can still be redone.
+  type AsrResult = {
+    utterances: TimestampedUtterance[];
+    words: TimestampedWord[];
+    durationSec: number;
+    hasDiarization?: boolean;
+  };
+  const runTimestamped = async (): Promise<{ result: AsrResult | null; billed: boolean }> => {
+    if (!has(passes, "timestamped") && !has(passes, "align")) {
+      const cached = forceAll
+        ? null
+        : readJson<AsrResult>(`${options.intermediatesDir}/timestamped.json`);
+      return { result: cached, billed: false };
+    }
+    checkAbort();
+    if (tsProvider === "none") {
+      logger.info("=== timestamped: none (the LLM's own timestamps are used) ===");
+      return { result: null, billed: false };
+    }
+    if (tsProvider === "whisper-groq") {
+      logger.info("=== timestamped (Groq Whisper — no diarization) ===");
+      // Reuse the compact mono 16kHz mp3 from preprocess (also satisfies Groq's 25MB limit).
+      if (!existsSync(audioPath)) await extractAudio(options.input, audioPath, AUDIO_OPTS);
+      const groq = new WhisperGroqClient(keys.groq!);
+      const result = await groq
+        .transcribe(await readFile(audioPath), { language: options.language })
+        .catch(stageTag("asr"));
+      writeJson(`${options.intermediatesDir}/timestamped.json`, result);
+      return { result, billed: true };
+    }
+    if (tsProvider === "elevenlabs") {
+      logger.info("=== timestamped (ElevenLabs Scribe v2) ===");
+      // Cache by provider and language — switching must not serve another run's clock.
+      const cachePath = `${options.intermediatesDir}/timestamped-elevenlabs${options.language ? `-${options.language}` : ""}.json`;
+      let result = forceAll ? null : readJson<AsrResult>(cachePath);
+      let billed = false;
+      if (!result) {
+        const el = new ElevenLabsClient(keys.elevenlabs!);
+        result = await el
+          .transcribe(await readFile(audioPath), { languageCode: options.language })
+          .catch(stageTag("asr"));
+        billed = true;
+        writeJson(cachePath, result);
+      } else {
+        logger.info("[elevenlabs] cache hit");
+      }
+      writeJson(`${options.intermediatesDir}/timestamped.json`, result);
+      logger.info(
+        `[elevenlabs] ${result.utterances.length} utterances, ${result.words.length} words`,
+      );
+      return { result, billed };
+    }
+    logger.info("=== timestamped (AssemblyAI) ===");
+    const aai = new AssemblyAIProvider({
+      apiKey: keys.assemblyai!,
+      cacheDir: `${options.intermediatesDir}/assemblyai`,
+      language: options.language,
+    });
+    const result = await aai.transcribe(audioPath).catch(stageTag("asr"));
+    writeJson(`${options.intermediatesDir}/timestamped.json`, result);
+    return { result, billed: !aai.lastFromCache };
+  };
+  const asrRun = runTimestamped();
+  // Awaited after transcription. Until then this only keeps an early ASR failure from
+  // surfacing as an unhandled rejection while the LLM chunks are still running.
+  asrRun.catch(() => undefined);
+
   // ---------- 2. DESCRIBE ----------
   let description: MeetingDescription | null = null;
   if (has(passes, "describe")) {
@@ -340,15 +415,13 @@ export async function transcribe(opts: PipelineOptions): Promise<TranscriptResul
     }
     chunks = planChunks(duration, options.chunkDurationSec, options.chunkOverlapSec);
     if (silences.length > 3) {
-      chunks = chunks.map((c) => {
-        const snapped = snapToSilence(
-          c.start,
-          silences,
-          Math.min(10, options.chunkOverlapSec / 2),
-        );
-        // trustedStart must follow the snapped start so ownership partitioning is correct.
-        return { ...c, start: snapped, trustedStart: snapped + c.overlapWithPrevious };
-      });
+      // Only the audio cut moves to a nearby silence. Ownership still changes hands at the
+      // previous chunk's end (planChunks' trustedStart): moving it with the cut left a
+      // hole, or a doubled stretch, of up to ±10 s at every snapped seam.
+      chunks = chunks.map((c) => ({
+        ...c,
+        start: snapToSilence(c.start, silences, Math.min(10, options.chunkOverlapSec / 2)),
+      }));
     }
   }
 
@@ -368,7 +441,11 @@ export async function transcribe(opts: PipelineOptions): Promise<TranscriptResul
     })),
   });
 
+  const llmDir = `${options.intermediatesDir}/llm`;
   let llmChunkResults: ChunkTranscriptionResult[] = [];
+  // The chunk each result came from (same order). A result's segments can't say which chunk
+  // it was when there are none.
+  let llmChunkPlans: ChunkPlan[] = [];
   if (has(passes, "llm-transcribe")) {
     logger.info("=== llm-transcribe ===");
     let runChunks = chunks;
@@ -379,7 +456,6 @@ export async function transcribe(opts: PipelineOptions): Promise<TranscriptResul
     );
 
     const client = new GeminiClient(keys.gemini!);
-    const llmDir = `${options.intermediatesDir}/llm`;
     mkdirSync(llmDir, { recursive: true });
 
     // Live partial output: as chunks complete, keep a coarse-timed partial transcript
@@ -423,19 +499,6 @@ export async function transcribe(opts: PipelineOptions): Promise<TranscriptResul
       if (!existsSync(chunkPath) || forceAll) {
         await extractChunk(audioPath, chunkPath, chunk.start, chunk.end, AUDIO_OPTS);
       }
-      // Previous tail for continuity (best-effort: from prior chunk's cached result).
-      let previousTail: string | undefined;
-      if (chunk.index > 0) {
-        const prev = readJson<ChunkTranscriptionResult>(
-          `${llmDir}/chunk_${String(chunk.index - 1).padStart(2, "0")}_parsed.json`,
-        );
-        if (prev && prev.segments.length) {
-          previousTail = prev.segments
-            .slice(-6)
-            .map((s) => `${s.speaker}: ${s.text}`)
-            .join("\n");
-        }
-      }
       logger.info(
         `chunk ${chunk.index}: transcribing [${chunk.start.toFixed(0)}-${chunk.end.toFixed(0)}]s...`,
       );
@@ -449,7 +512,6 @@ export async function transcribe(opts: PipelineOptions): Promise<TranscriptResul
           total: runChunks.length,
           description: description?.description,
           roster: description?.roster,
-          previousTail,
           instructions: options.instructions,
         },
         { chunkDurationSec: chunk.end - chunk.start, validationRetries: 1 },
@@ -463,6 +525,7 @@ export async function transcribe(opts: PipelineOptions): Promise<TranscriptResul
       writePartial();
       return tagWith(result, chunk);
     });
+    llmChunkPlans = runChunks;
 
     // Fail loudly if transcription produced nothing because every chunk hit an API/parse
     // error (e.g. an unknown --model 404). Without this, an errored run would silently
@@ -479,19 +542,104 @@ export async function transcribe(opts: PipelineOptions): Promise<TranscriptResul
       );
     }
   } else {
-    // Load all chunk results from disk (only if caches are valid for this input).
-    const llmDir = `${options.intermediatesDir}/llm`;
+    // Load all chunk results from disk (only if caches are valid for this input). The chunk
+    // comes from the file name, not the sort position, so a missing file can't shift every
+    // later chunk onto the wrong audio window.
     if (!forceAll && existsSync(llmDir)) {
-      const files = (await import("node:fs/promises").then((m) => m.readdir(llmDir)))
-        .filter((f) => f.endsWith("_parsed.json"))
-        .sort();
-      llmChunkResults = files
-        .map((f, i) => {
-          const r = readJson<ChunkTranscriptionResult>(`${llmDir}/${f}`);
-          return r && chunks[i] ? tagWith(r, chunks[i]!) : r;
-        })
-        .filter(Boolean) as ChunkTranscriptionResult[];
+      for (const f of readdirSync(llmDir).sort()) {
+        const m = /^chunk_(\d+)_parsed\.json$/.exec(f);
+        const plan = m ? chunks.find((c) => c.index === Number(m[1])) : undefined;
+        const r = plan ? readJson<ChunkTranscriptionResult>(`${llmDir}/${f}`) : null;
+        if (r && plan) {
+          llmChunkResults.push(tagWith(r, plan));
+          llmChunkPlans.push(plan);
+        }
+      }
     }
+  }
+
+  // ---------- 4. TIMESTAMPED (await) ----------
+  const { result: asrResult, billed: asrBilled } = await asrRun;
+
+  // ---------- 4.1 COVERAGE ----------
+  // A chunk whose transcript holds far fewer words than the ASR heard in the same audio
+  // lost speech: cut off early, a "[silence]" placeholder over conversation, or a loop. It
+  // is transcribed again in two halves, and the attempt that covers more is kept. Retries
+  // are cached beside the chunk, so a re-run doesn't pay twice. See coverage.ts.
+  const quality: ChunkQuality[] = [];
+  if (asrResult?.words.length) {
+    let client: GeminiClient | undefined;
+    for (let i = 0; i < llmChunkResults.length; i++) {
+      const plan = llmChunkPlans[i]!;
+      const where = `chunk ${plan.index} [${plan.start.toFixed(0)}-${plan.end.toFixed(0)}]s`;
+      let cov = chunkCoverage(llmChunkResults[i]!.segments, asrResult.words, plan.start, plan.end);
+      let status: ChunkQuality["status"] = cov.low ? "low-coverage" : "ok";
+      if (cov.low) {
+        const retryPath = `${llmDir}/chunk_${String(plan.index).padStart(2, "0")}_retry_parsed.json`;
+        let retry = forceAll ? null : readJson<ChunkTranscriptionResult>(retryPath);
+        if (!retry && has(passes, "llm-transcribe")) {
+          checkAbort();
+          logger.warn(
+            `${where}: ${cov.llmWords} words transcribed where the ASR heard ${cov.asrWords} — transcribing it again in two halves`,
+          );
+          client ??= new GeminiClient(keys.gemini!);
+          retry = await transcribeInHalves({
+            client,
+            model: models.transcribe,
+            audioPath,
+            chunk: plan,
+            pathPrefix: `${llmDir}/chunk_${String(plan.index).padStart(2, "0")}`,
+            ctx: {
+              index: plan.index + 1,
+              total: chunks.length,
+              description: description?.description,
+              roster: description?.roster,
+              instructions: options.instructions,
+            },
+            audioOpts: AUDIO_OPTS,
+          }).catch(stageTag("llm-transcribe"));
+          writeJson(retryPath, retry);
+        }
+        if (retry) {
+          const again = chunkCoverage(retry.segments, asrResult.words, plan.start, plan.end);
+          logger.info(
+            `${where}: the halves cover ${again.llmWords} words (${again.ratio.toFixed(2)} per ASR word, was ${cov.ratio.toFixed(2)})${again.ratio > cov.ratio ? " — kept" : " — first attempt kept"}`,
+          );
+          if (again.ratio > cov.ratio) {
+            llmChunkResults[i] = tagWith(retry, plan);
+            cov = again;
+            status = again.low ? "low-coverage" : "retried";
+          }
+        }
+      }
+      quality.push({
+        chunk: plan.index,
+        start: plan.start,
+        end: plan.end,
+        status,
+        llmWords: cov.llmWords,
+        asrWords: cov.asrWords,
+        coverage: Number.isFinite(cov.ratio) ? Number(cov.ratio.toFixed(2)) : null,
+      });
+    }
+  }
+  // A meeting in a language the ASR didn't expect comes back as a handful of words (a
+  // 9-minute Korean meeting: 31 English words against 1,342 transcribed), so alignment has
+  // nothing to anchor to and the LLM's own timestamps are used (aligner.ts). Good chunks
+  // never exceed 1.61 transcript words per ASR word. Say so, and how to fix it.
+  const whole = asrResult?.words.length
+    ? chunkCoverage(
+        llmChunkResults.flatMap((r) => r.segments),
+        asrResult.words,
+        0,
+        Infinity,
+      )
+    : null;
+  const asrMissedSpeech = !!whole && whole.llmWords >= 200 && whole.ratio > 3;
+  if (asrMissedSpeech) {
+    logger.warn(
+      `the ASR (${tsProvider}) heard ${whole!.asrWords} words where the transcript has ${whole!.llmWords} — the recording may be in a language it didn't expect, so timings come from the LLM; re-run with --language <code> (e.g. ko, ml, hi)`,
+    );
   }
 
   // Gather all LLM segments (absolute times already applied), then partition by chunk
@@ -500,6 +648,12 @@ export async function transcribe(opts: PipelineOptions): Promise<TranscriptResul
   // (no overlap double-printing) — the fix for the WER-inflating dedup bug — which the
   // fuzzy dedup in finalize can miss (e.g. when overlap duplicates map to different speakers).
   let allLlmSegments: ParsedLlmSegment[] = llmChunkResults.flatMap((r) => r.segments);
+  // Words to time the transcript by: none when the ASR missed most of the speech (a
+  // language it didn't expect), so the LLM's own timestamps stand, as the warning says.
+  const timingWords = asrMissedSpeech ? [] : (asrResult?.words ?? []);
+  // Ownership is decided on time, so first move each chunk's timestamps onto the ASR's
+  // clock: a chunk whose clock ran early lost its opening lines as "overlap".
+  allLlmSegments = toAsrClock(allLlmSegments, timingWords);
   const beforePart = allLlmSegments.length;
   allLlmSegments = partitionByOwnership(allLlmSegments);
   if (beforePart !== allLlmSegments.length) {
@@ -509,91 +663,24 @@ export async function transcribe(opts: PipelineOptions): Promise<TranscriptResul
   }
   logger.info(`total LLM segments: ${allLlmSegments.length}`);
 
-  // ---------- 4. TIMESTAMPED ----------
-  let asrResult: {
-    utterances: TimestampedUtterance[];
-    words: TimestampedWord[];
-    durationSec: number;
-    hasDiarization?: boolean;
-  } | null = null;
-  // Whether this run made a paid ASR call (cache hits and skipped passes cost nothing —
-  // the receipt and lifetime stats must not bill them).
-  let asrBilled = false;
-  if (has(passes, "timestamped") || has(passes, "align")) {
-    checkAbort();
-    const provider = options.timestampedProvider ?? "assemblyai";
-    if (provider === "whisper-groq") {
-      logger.info("=== timestamped (Groq Whisper — no diarization) ===");
-      if (!keys.groq) throw new Error("GROQ_API_KEY is required for whisper-groq");
-      // Reuse the compact mono 16kHz mp3 from preprocess (also satisfies Groq's 25MB limit).
-      if (!existsSync(audioPath) || forceAll) {
-        await extractAudio(options.input, audioPath, AUDIO_OPTS);
-      }
-      const { readFile } = await import("node:fs/promises");
-      const buf = await readFile(audioPath);
-      const groq = new WhisperGroqClient(keys.groq!);
-      asrResult = await groq.transcribe(buf).catch(stageTag("asr"));
-      asrBilled = true;
-      writeJson(`${options.intermediatesDir}/timestamped.json`, asrResult);
-    } else if (provider === "elevenlabs") {
-      logger.info("=== timestamped (ElevenLabs Scribe v2) ===");
-      if (!keys.elevenlabs)
-        throw new Error("ELEVENLABS_API_KEY is required for --timestamped elevenlabs");
-      // Cache by provider — switching providers must not serve the other one's clock.
-      const cachePath = `${options.intermediatesDir}/timestamped-elevenlabs.json`;
-      asrResult = forceAll ? null : readJson(cachePath);
-      if (!asrResult) {
-        const { readFile } = await import("node:fs/promises");
-        const buf = await readFile(audioPath);
-        const el = new ElevenLabsClient(keys.elevenlabs!);
-        asrResult = await el.transcribe(buf).catch(stageTag("asr"));
-        asrBilled = true;
-        writeJson(cachePath, asrResult);
-      } else {
-        logger.info("[elevenlabs] cache hit");
-      }
-      writeJson(`${options.intermediatesDir}/timestamped.json`, asrResult);
-      logger.info(
-        `[elevenlabs] ${asrResult.utterances.length} utterances, ${asrResult.words.length} words, ${(asrResult as { speakers?: string[] }).speakers?.length ?? "?"} speakers`,
-      );
-    } else {
-      logger.info("=== timestamped (AssemblyAI) ===");
-      if (!keys.assemblyai)
-        throw new Error(
-          "ASSEMBLYAI_API_KEY is required for the timestamped pass (or use --timestamped whisper-groq)",
-        );
-      const aai = new AssemblyAIProvider({
-        apiKey: keys.assemblyai!,
-        cacheDir: `${options.intermediatesDir}/assemblyai`,
-      });
-      asrResult = await aai.transcribe(audioPath).catch(stageTag("asr"));
-      asrBilled = !aai.lastFromCache;
-      writeJson(`${options.intermediatesDir}/timestamped.json`, asrResult);
-    }
-  } else {
-    asrResult = forceAll
-      ? null
-      : readJson(`${options.intermediatesDir}/timestamped.json`);
-  }
-
-  // ---------- 4.5 DROP UNRELIABLE CHUNKS ----------
-  // Two transcription failures otherwise ship as confident text; both are better replaced
-  // by what the ASR actually heard (gap-fill below refills the range from ASR words):
-  //  - a repetition loop that survived every retry, and
-  //  - text the ASR can't corroborate at all — a conversation invented over faint or
-  //    background speech (see grounding.ts).
-  // Recomputed from the segments (cheap) rather than trusted from the cached validation,
-  // so caches written before these checks existed are covered too.
+  // ---------- 4.5 DROP LOOPS ----------
+  // A repetition loop that survived every retry ships as confident text; it is better
+  // replaced by what the ASR actually heard (gap-fill below refills the range from ASR
+  // words). Text the ASR can't corroborate (grounding.ts) is only flagged: a correct
+  // translated or mixed-language chunk scores just as low, and refilling it from ASR would
+  // replace it with wrong-language text. Recomputed from the segments (cheap) rather than
+  // trusted from the cached validation, so caches written before these checks are covered.
   if (asrResult?.words.length && (has(passes, "align") || has(passes, "consistency"))) {
     const dropped = new Set<number>();
-    for (const r of llmChunkResults) {
-      const idx = r.segments[0]?.chunkIndex;
-      const plan = chunks.find((c) => c.index === idx);
-      if (idx === undefined || !plan) continue;
-      const where = `chunk ${idx} [${plan.start.toFixed(0)}-${plan.end.toFixed(0)}]s`;
+    for (let i = 0; i < llmChunkResults.length; i++) {
+      const r = llmChunkResults[i]!;
+      const plan = llmChunkPlans[i]!;
+      const q = quality.find((x) => x.chunk === plan.index);
+      const where = `chunk ${plan.index} [${plan.start.toFixed(0)}-${plan.end.toFixed(0)}]s`;
       const compression = maxCompressionRatio(r.segments.map((s) => s.text).join(" "));
       if (compression > DEGENERATE_COMPRESSION_RATIO) {
-        dropped.add(idx);
+        dropped.add(plan.index);
+        if (q) q.status = "dropped-loop";
         logger.warn(
           `${where}: dropping repetition-loop text (compression ratio ${compression.toFixed(1)}) — ASR will fill this range`,
         );
@@ -601,9 +688,9 @@ export async function transcribe(opts: PipelineOptions): Promise<TranscriptResul
       }
       const g = chunkGrounding(r.segments, asrResult.words, plan.start, plan.end);
       if (!g.grounded) {
-        dropped.add(idx);
+        if (q) q.ungrounded = true;
         logger.warn(
-          `${where}: dropping text the audio doesn't support (${Math.round(g.precision * 100)}% of ${g.llmTokens} content words heard by ASR) — ASR will fill this range`,
+          `${where}: only ${Math.round(g.precision * 100)}% of ${g.llmTokens} content words were also heard by the ASR — check this stretch (kept as transcribed)`,
         );
       }
     }
@@ -615,10 +702,11 @@ export async function transcribe(opts: PipelineOptions): Promise<TranscriptResul
   }
 
   // ---------- 5. ALIGN ----------
+  // With no ASR (`--timestamped none`) alignment keeps each segment's own LLM timestamps.
   let aligned: AlignedSegment[] = [];
-  if (has(passes, "align") && asrResult) {
+  if (has(passes, "align") && (asrResult || tsProvider === "none")) {
     logger.info("=== align ===");
-    aligned = alignSegments(allLlmSegments, asrResult.words, { timeMarginSec: 30 });
+    aligned = alignSegments(allLlmSegments, timingWords, { timeMarginSec: 30 });
     writeJson(`${options.intermediatesDir}/aligned.json`, aligned);
   } else {
     aligned =
@@ -631,13 +719,16 @@ export async function transcribe(opts: PipelineOptions): Promise<TranscriptResul
 
   // ---------- 5.5 GAP-FILL ----------
   // Recover content the LLM dropped: insert ASR fallback segments for uncovered speech.
-  if (asrResult && (has(passes, "align") || has(passes, "consistency"))) {
+  // Not from an ASR that missed most of the speech: its words would be the wrong language.
+  let gapFilledWords = 0;
+  if (asrResult && !asrMissedSpeech && (has(passes, "align") || has(passes, "consistency"))) {
     aligned = fillAsrGaps(aligned, asrResult.words, asrResult.utterances);
     // Only gap-fill produces "timestamped" segments (aligned.json predates this step).
     const added = aligned.filter((a) => a.timingSource === "timestamped");
+    gapFilledWords = added.reduce((n, a) => n + a.words.length, 0);
     if (added.length) {
       logger.info(
-        `gap-filled ${added.length} ASR fallback segment(s) (${added.reduce((n, a) => n + a.words.length, 0)} words)`,
+        `gap-filled ${added.length} ASR fallback segment(s) (${gapFilledWords} words)`,
       );
     }
   }
@@ -654,12 +745,13 @@ export async function transcribe(opts: PipelineOptions): Promise<TranscriptResul
   }
 
   // ---------- 6. CONSISTENCY ----------
+  // Without an ASR, speakers are grouped by the LLM's own labels.
   let segments = aligned;
   let speakers: TranscriptResult["speakers"] = [];
-  if (has(passes, "consistency") && asrResult) {
+  if (has(passes, "consistency") && (asrResult || tsProvider === "none")) {
     logger.info("=== consistency ===");
-    const cons = assignGlobalSpeakers(aligned, asrResult.utterances, {
-      hasDiarization: asrResult.hasDiarization ?? true,
+    const cons = assignGlobalSpeakers(aligned, asrResult?.utterances ?? [], {
+      hasDiarization: asrResult ? (asrResult.hasDiarization ?? true) : false,
     });
     segments = cons.segments;
     speakers = cons.speakers;
@@ -716,6 +808,13 @@ export async function transcribe(opts: PipelineOptions): Promise<TranscriptResul
         reasonerA: reasonerA.info.model,
         reasonerB: reasonerB?.info.model ?? null,
         knownSpeakers: options.knownSpeakers ?? [],
+        // What the naming step reads. If a re-run changes the transcript (a re-transcribed
+        // chunk can reorder speakers by talk time), "Speaker A" may now be the other voice,
+        // and the cached names must not be applied to it.
+        inputs: createHash("sha1")
+          .update(JSON.stringify(segments.map((s) => [s.speaker, s.text])))
+          .update(JSON.stringify(speakers.map((sp) => sp.id)))
+          .digest("hex"),
       };
       const idCachePath = `${options.intermediatesDir}/identified.json`;
       const cachedId = forceAll
@@ -819,7 +918,14 @@ export async function transcribe(opts: PipelineOptions): Promise<TranscriptResul
       inputTokens: receipt.totals.inputTokens,
       outputTokens: receipt.totals.outputTokens,
     },
+    ...(asrResult ? { quality: { chunks: quality, gapFilledWords, asrMissedSpeech } } : {}),
   };
+  const degraded = quality.filter((q) => q.status !== "ok");
+  if (degraded.length || asrMissedSpeech) {
+    logger.warn(
+      `quality: ${degraded.map((q) => `chunk ${q.chunk} ${q.status}`).join(", ") || "all chunks ok"}${asrMissedSpeech ? " · the ASR missed most of the speech" : ""} · ${gapFilledWords} words filled from the ASR`,
+    );
+  }
   const result: TranscriptResult = { segments: finalSegments, speakers, metadata };
   // The full result also lands in the cache so post-hoc tools (rename) can work
   // straight from the media path without the user having asked for --formats json.

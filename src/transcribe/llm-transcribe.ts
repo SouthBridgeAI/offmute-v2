@@ -189,7 +189,20 @@ export async function transcribeChunk(
     return "degenerate repetition";
   };
 
-  let lastResult: ChunkTranscriptionResult | undefined;
+  let best: ChunkTranscriptionResult | undefined;
+  // Valid beats invalid; an invalid answer with text beats a loop; a loop beats an error.
+  // Among equals, the wider span. (Returning the last attempt let a retry that errored or
+  // looped throw away a nearly-valid first answer.)
+  const rank = (r: ChunkTranscriptionResult) =>
+    r.validation.isValid ? 3 : r.error ? 0 : r.validation.degenerate ? 1 : 2;
+  const keep = (r: ChunkTranscriptionResult) => {
+    if (
+      !best ||
+      rank(r) > rank(best) ||
+      (rank(r) === rank(best) && r.validation.spanSec > best.validation.spanSec)
+    )
+      best = r;
+  };
 
   for (let attempt = 0; attempt <= validationRetries; attempt++) {
     loopAborted = false;
@@ -209,7 +222,7 @@ export async function transcribeChunk(
     );
 
     if (gen.error || !gen.data) {
-      lastResult = {
+      keep({
         segments: [],
         raw: gen.raw,
         usage: gen.usage,
@@ -221,7 +234,7 @@ export async function transcribeChunk(
           message: gen.error || "no data",
         },
         error: gen.error,
-      };
+      });
       logger.warn(
         `[llm] chunk ${ctx.index} attempt ${attempt + 1}: API/parse error — ${gen.error}`,
       );
@@ -231,13 +244,14 @@ export async function transcribeChunk(
 
     const { segments, dropped } = parseLlmSegments(gen.data, chunkStartSec);
     const v = validate(segments, opts.chunkDurationSec);
-    lastResult = { segments, raw: gen.raw, usage: gen.usage, validation: v };
+    const result = { segments, raw: gen.raw, usage: gen.usage, validation: v };
+    keep(result);
 
     if (v.isValid) {
       logger.info(
         `[llm] chunk ${ctx.index} ok: ${v.message}${dropped ? `, dropped ${dropped}` : ""}`,
       );
-      return lastResult;
+      return result;
     }
     logger.warn(
       `[llm] chunk ${ctx.index} attempt ${attempt + 1} validation: ${v.message}`,
@@ -245,9 +259,9 @@ export async function transcribeChunk(
     if (v.degenerate) temperature = Math.min(1, temperature + 0.3);
   }
 
-  // Return the last (invalid) result so the caller can decide to fall back.
+  // Return the best (still invalid) attempt so the caller can decide to fall back.
   logger.error(
     `[llm] chunk ${ctx.index} failed validation after ${validationRetries + 1} attempts`,
   );
-  return lastResult!;
+  return best!;
 }

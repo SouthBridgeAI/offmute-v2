@@ -32,6 +32,8 @@ export interface ElevenLabsOptions {
   /** Key terms to bias recognition toward (names, jargon) — fed from --instructions. */
   keyterms?: string[];
   numSpeakers?: number;
+  /** ISO language code (e.g. "ko"); omitted, Scribe detects it. */
+  languageCode?: string;
 }
 
 const MAX_UTTERANCE_GAP_SEC = 1.5;
@@ -56,6 +58,7 @@ export class ElevenLabsClient {
     form.append("diarize", "true");
     form.append("tag_audio_events", "false");
     if (opts.numSpeakers) form.append("num_speakers", String(opts.numSpeakers));
+    if (opts.languageCode) form.append("language_code", opts.languageCode);
     for (const term of opts.keyterms ?? []) form.append("keyterms", term);
 
     const data = await withRetry("elevenlabs", async () => {

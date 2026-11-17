@@ -9,14 +9,12 @@
  */
 import type { AlignedSegment } from "./aligner.js";
 import type { TimestampedWord, TimestampedUtterance } from "../core/types.js";
-import { tokenize } from "./normalize.js";
+import { normalizeWord, tokenize } from "./normalize.js";
 
 const MIN_GAP_SEC = 0.8; // only fill gaps at least this wide
 const MIN_WORDS = 1; // fill if at least this many ASR words in the gap
-
-function normSet(text: string): Set<string> {
-  return new Set(tokenize(text).map((t) => t.norm));
-}
+/** Words beyond the gap's own count still checked at the start of the following segment. */
+const HEAD_SLACK_WORDS = 5;
 
 /** Index of the utterance containing time `t` (utterances sorted by start), or -1. */
 function utteranceAt(utts: TimestampedUtterance[], t: number): number {
@@ -85,16 +83,19 @@ export function fillAsrGaps(
     const words = asrWords.filter((w) => w.start >= gs && w.start < ge);
     if (words.length < MIN_WORDS) continue;
 
-    // Skip if the gap's words are already in the following segment's text — that's a
-    // timing imprecision (the word is in the text, just the segment start is late), not
-    // a real drop. Filling it would duplicate.
+    // Skip if the gap's words open the following segment — that's a timing imprecision
+    // (the words are in the text, just the segment start is late), not a real drop.
+    // Filling it would duplicate. Only the segment's opening words can be those: a long
+    // turn contains most common words somewhere, which once skipped a real 12-word gap.
     if (following) {
-      const followingWords = normSet(following.text);
-      const gapNorms = words.map((w) =>
-        w.text.toLowerCase().replace(/^[^a-z0-9']+|[^a-z0-9']+$/gi, ""),
+      const gapNorms = words.map((w) => normalizeWord(w.text)).filter(Boolean);
+      const head = new Set(
+        tokenize(following.text)
+          .slice(0, gapNorms.length + HEAD_SLACK_WORDS)
+          .map((t) => t.norm),
       );
-      const covered = gapNorms.filter((n) => n && followingWords.has(n)).length;
-      if (covered / gapNorms.filter(Boolean).length >= 0.6) continue;
+      const covered = gapNorms.filter((n) => head.has(n)).length;
+      if (covered / gapNorms.length >= 0.6) continue;
     }
 
     // One fallback segment per ASR utterance: a long recovered range is a conversation,

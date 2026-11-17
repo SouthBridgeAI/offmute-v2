@@ -77,6 +77,10 @@ export interface PipelineOptions {
   reasoner?: string;
   /** Timestamped provider. */
   timestampedProvider?: TimestampedProvider;
+  /** Spoken language for the ASR (e.g. "ko", "ml", "hi"). Omitted, each ASR detects one
+   * language per file, which can fail on a meeting full of English loanwords. Changing it
+   * re-runs only the ASR (its cache is keyed by language), not the transcription. */
+  language?: string;
   /** Speaker identification mode: "dual" (two reasoners + adjudication, default) or
    * "single" (one reasoner; the self-introduction tripwire still applies). */
   identifyMode?: "dual" | "single";
@@ -121,6 +125,10 @@ export const DEFAULT_PASSES: Pass[] = [
 
 /** Model presets. Names map to provider + model strings. */
 export const MODELS = {
+  gemini4Hydrogen: "gemini-4-hydrogen",
+  gemini4Argon: "gemini-4-argon",
+  gemini4Carbon: "gemini-4-carbon",
+  gemini38Flash: "gemini-3.8-flash",
   gemini25Pro: "gemini-2.5-pro",
   gemini25Flash: "gemini-2.5-flash",
   gemini3Pro: "gemini-3-pro-preview",
@@ -133,9 +141,9 @@ export const MODELS = {
 } as const;
 
 /** Default model for each role (used when --model/--reasoner not passed).
- * Gemini 3.1 Pro is the default for best diarization/tone quality; its thinking is tamed
+ * Gemini 3.1 Pro is the default for diarization/tone quality; its thinking is tamed
  * per-model (see resolveThinking) so it stays practical for transcription. Use
- * `--model gemini-2.5-flash` / `gemini-flash-latest` for faster/cheaper runs. */
+ * `--model gemini-3.8-flash` for cheaper runs, or `gemini-4-hydrogen` at the same cost. */
 export const DEFAULT_TRANSCRIBE_MODEL = MODELS.gemini31Pro;
 export const DEFAULT_REASONER_MODEL = MODELS.deepseek;
 
@@ -171,6 +179,7 @@ export function resolveOptions(
     | "model"
     | "reasoner"
     | "timestampedProvider"
+    | "language"
     | "signal"
   >
 > &
@@ -183,6 +192,7 @@ export function resolveOptions(
     | "model"
     | "reasoner"
     | "timestampedProvider"
+    | "language"
     | "signal"
   > {
   return {
@@ -222,6 +232,7 @@ export function resolveOptions(
     model: opts.model,
     reasoner: opts.reasoner,
     timestampedProvider: opts.timestampedProvider,
+    language: opts.language,
     force: opts.force ?? false,
     onlyChunk: opts.onlyChunk,
     showProgress: opts.showProgress ?? true,

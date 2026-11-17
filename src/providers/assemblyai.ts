@@ -28,6 +28,8 @@ export interface AssemblyAIOptions {
   speakersExpected?: number;
   /** Speech model (default "universal" = Universal-2). */
   speechModel?: string;
+  /** Language code (e.g. "ko", "ml"). Omitted: AssemblyAI detects one language per file. */
+  language?: string;
 }
 
 export interface AssemblyAIResult {
@@ -39,6 +41,8 @@ export interface AssemblyAIResult {
   speakers: string[];
   transcriptId: string;
   speechModelUsed?: string;
+  /** The language AssemblyAI transcribed in (detected, or the one requested). */
+  languageCode?: string;
   /** AssemblyAI does its own speaker diarization. */
   hasDiarization: true;
 }
@@ -57,17 +61,31 @@ export class AssemblyAIProvider {
     this.cacheDir = opts.cacheDir;
     this.speechModel = (opts.speechModel as SpeechModel) ?? "universal";
     this.speakersExpected = opts.speakersExpected;
+    this.language = opts.language;
   }
 
   private speechModel: SpeechModel;
   private speakersExpected?: number;
+  private language?: string;
   /** Whether the last transcribe() was served from the content-hash cache (no paid call). */
   lastFromCache = false;
 
   /** Transcribe a local audio file. Returns cached result if available. */
   async transcribe(filePath: string): Promise<AssemblyAIResult> {
     const hash = await fileHash(filePath);
-    const cachePath = this.cacheDir ? `${this.cacheDir}/${hash}.json` : undefined;
+    // The cache key names every non-default request option, so a run with another language
+    // or model can't be served this one's words. (Defaults keep the plain hash, so caches
+    // written before options existed stay valid.)
+    const variant = [
+      this.language && `lang-${this.language}`,
+      this.speakersExpected && `spk-${this.speakersExpected}`,
+      this.speechModel !== "universal" && this.speechModel,
+    ]
+      .filter(Boolean)
+      .join("_");
+    const cachePath = this.cacheDir
+      ? `${this.cacheDir}/${hash}${variant ? `_${variant}` : ""}.json`
+      : undefined;
 
     this.lastFromCache = false;
     if (cachePath && existsSync(cachePath)) {
@@ -82,13 +100,19 @@ export class AssemblyAIProvider {
     const uploadUrl = await withRetry("assemblyai upload", () =>
       this.client.files.upload(filePath),
     );
-    logger.info(`[assemblyai] transcribing (speech_model=${this.speechModel})...`);
+    logger.info(
+      `[assemblyai] transcribing (speech_model=${this.speechModel}, language=${this.language ?? "auto-detect"})...`,
+    );
     const params: TranscribeParams = {
       audio: uploadUrl,
       speaker_labels: true,
       speech_model: this.speechModel,
     };
     if (this.speakersExpected) params.speakers_expected = this.speakersExpected;
+    // Left unset, AssemblyAI assumes English: a Korean meeting came back as 31 English words
+    // for 9 minutes of speech. So without a language, ask it to detect one per file.
+    if (this.language) params.language_code = this.language;
+    else params.language_detection = true;
 
     const transcript = await withRetry("assemblyai transcribe", () =>
       this.client.transcripts.transcribe(params),
@@ -103,7 +127,7 @@ export class AssemblyAIProvider {
       await writeFile(cachePath, JSON.stringify(result, null, 2));
     }
     logger.info(
-      `[assemblyai] done: ${result.utterances.length} utterances, ${result.words.length} words, ${result.speakers.length} speakers`,
+      `[assemblyai] done: ${result.utterances.length} utterances, ${result.words.length} words, ${result.speakers.length} speakers, language ${result.languageCode ?? "?"}`,
     );
     return result;
   }
@@ -113,6 +137,7 @@ export class AssemblyAIProvider {
       id?: string | null;
       audio_duration?: number | null;
       speech_model_used?: string | null;
+      language_code?: string | null;
       utterances?:
         | {
             speaker: string;
@@ -160,6 +185,7 @@ export class AssemblyAIProvider {
       words,
       durationSec,
       audioDurationSec: t.audio_duration ?? undefined, // AssemblyAI returns seconds (not ms)
+      languageCode: t.language_code ?? undefined,
       speakers: [...speakers].sort(),
       transcriptId: t.id ?? id,
       speechModelUsed: t.speech_model_used ?? undefined,

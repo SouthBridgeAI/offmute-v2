@@ -37,13 +37,15 @@ const SENTENCES = [
   "Thanks, talk tomorrow.",
 ];
 const CLEAN = transcript(SENTENCES.length, (i) => SENTENCES[i]!);
-/** Test double: transcribeChunk only calls generateJson; responses are served in order. */
-function fakeClient(responses: LlmTranscriptJson[]): GeminiClient {
+/** Test double: transcribeChunk only calls generateJson; responses are served in order.
+ * A string response is an API error with that message. */
+function fakeClient(responses: (LlmTranscriptJson | string)[]): GeminiClient {
   const queue = [...responses];
   const fake = {
     async generateJson() {
-      const data = queue.shift()!;
-      return { data, raw: JSON.stringify(data), usage };
+      const next = queue.shift()!;
+      if (typeof next === "string") return { data: null, raw: "", usage, error: next };
+      return { data: next, raw: JSON.stringify(next), usage };
     },
   };
   return fake as unknown as GeminiClient;
@@ -74,5 +76,23 @@ describe("transcribeChunk repetition handling", () => {
     );
     expect(r.validation.isValid).toBe(false);
     expect(r.validation.degenerate).toBe(true);
+  });
+});
+
+describe("transcribeChunk keeps its best attempt", () => {
+  it("keeps a nearly-valid first answer when the retry errors", async () => {
+    // 18 segments over 0–53 s fail the 60%-of-a-100s-chunk span rule; the retry then
+    // dies on the network. Returning the last attempt turned the chunk into nothing.
+    const r = await transcribeChunk(
+      fakeClient([CLEAN, "fetch failed"]),
+      "m",
+      "c.mp3",
+      0,
+      ctx,
+      { chunkDurationSec: 100, validationRetries: 1 },
+    );
+    expect(r.validation.isValid).toBe(false);
+    expect(r.error).toBeUndefined();
+    expect(r.segments).toHaveLength(SENTENCES.length);
   });
 });

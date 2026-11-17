@@ -3,7 +3,7 @@
  * Sends audio as inline base64 (inlineData), which suits chunk-sized files
  * (≤ ~20MB). For larger files, chunk first (ffmpeg.wasm in browser, ffmpeg in node).
  */
-import type { GeminiUsage } from "./gemini.js";
+import { usageFromMetadata, type GeminiUsage } from "./gemini-usage.js";
 
 export interface GeminiFetchOptions {
   apiKey: string;
@@ -113,23 +113,11 @@ export class GeminiFetchClient {
         }
         const data = (await res.json()) as {
           candidates?: { content?: { parts?: { text?: string }[] } }[];
-          usageMetadata?: {
-            promptTokenCount?: number;
-            candidatesTokenCount?: number;
-            totalTokenCount?: number;
-          };
+          usageMetadata?: Parameters<typeof usageFromMetadata>[0];
         };
         const text =
           data.candidates?.[0]?.content?.parts?.map((p) => p.text || "").join("") ?? "";
-        const u = data.usageMetadata || {};
-        return {
-          text,
-          usage: {
-            inputTokens: u.promptTokenCount ?? 0,
-            outputTokens: u.candidatesTokenCount ?? 0,
-            totalTokens: u.totalTokenCount ?? 0,
-          },
-        };
+        return { text, usage: usageFromMetadata(data.usageMetadata) };
       } catch (err) {
         lastError = err instanceof Error ? err.message : String(err);
         if (attempt < maxRetries - 1)

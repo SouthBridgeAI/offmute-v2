@@ -36,9 +36,9 @@ describe("clampAndFix", () => {
     expect(out[0]!.end - out[0]!.start).toBeGreaterThanOrEqual(0.5);
   });
 
-  it("trims too-long blocks to MAX_DUR", () => {
+  it("keeps a long block's real end (cue length is the SRT formatter's job)", () => {
     const out = clampAndFix([seg(0, 20)]);
-    expect(out[0]!.end - out[0]!.start).toBeLessThanOrEqual(7.0);
+    expect(out[0]!.end).toBe(20);
   });
 });
 
@@ -99,5 +99,24 @@ describe("finalizeSegments", () => {
     expect(out[0]!.id).toBe(1);
     expect(out[1]!.id).toBe(2);
     expect(out[0]!.end).toBeLessThanOrEqual(out[1]!.start);
+  });
+
+  it("keeps an interjection the aligner could only place at a point in time", () => {
+    const out = finalizeSegments([
+      a(10, 14, "so the plan is to ship on friday"),
+      a(14, 14, "Yeah.", "B"), // zero width: none of its words was found in the ASR
+      a(14.2, 18, "and then we watch the numbers"),
+    ]);
+    expect(out.map((s) => s.text)).toEqual([
+      "so the plan is to ship on friday",
+      "Yeah.",
+      "and then we watch the numbers",
+    ]);
+    expect(out[1]!.speaker).toBe("B");
+  });
+
+  it("drops segments with no text", () => {
+    const out = finalizeSegments([a(0, 2, "hello there"), a(2, 3, "   ")]);
+    expect(out.map((s) => s.text)).toEqual(["hello there"]);
   });
 });

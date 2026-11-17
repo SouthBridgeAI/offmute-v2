@@ -68,6 +68,7 @@ interface TranscribeCliOpts {
   model?: string;
   reasoner?: string;
   timestamped?: "assemblyai" | "elevenlabs" | "whisper-groq" | "none";
+  language?: string;
   force: boolean;
   onlyChunk?: string;
   saveIntermediates: boolean;
@@ -94,7 +95,7 @@ function buildTips(
   }
   if (!opts.model && result.metadata.duration > 1500) {
     tips.push(
-      "long file on the pro model — try --model gemini-3.5-flash for ~4× cheaper and faster (quality holds up well)",
+      "long file on the pro model — --model gemini-3.8-flash costs about a third as much (until 1 Jan 2027)",
     );
   }
   if (!opts.formats && !opts.summary) {
@@ -163,6 +164,7 @@ async function runTranscribe(input: string, opts: TranscribeCliOpts): Promise<vo
     model: opts.model,
     reasoner: opts.reasoner,
     timestampedProvider: opts.timestamped,
+    language: opts.language,
     force: opts.force,
     onlyChunk: opts.onlyChunk ? parseInt(opts.onlyChunk, 10) : undefined,
     saveIntermediates: opts.saveIntermediates,
@@ -249,6 +251,10 @@ function addTranscribeOptions(cmd: Command): Command {
       "--timestamped <provider>",
       "timestamped provider (assemblyai|elevenlabs|whisper-groq|none)",
     )
+    .option(
+      "--language <code>",
+      "spoken language for the timing ASR, e.g. ko, ml, hi (default: the ASR detects one)",
+    )
     .option("--force", "force reprocess cached chunk outputs", false)
     .option("--only-chunk <n>", "process only a specific chunk index (debug)")
     .option("--save-intermediates", "save intermediates (default true)", true)
@@ -322,6 +328,7 @@ program
   .option("--model <name>", "override transcription model")
   .option("--reasoner <name>", "override text-reasoner model")
   .option("--timestamped <provider>", "assemblyai|elevenlabs|whisper-groq|none")
+  .option("--language <code>", "spoken language for the timing ASR, e.g. ko, ml, hi")
   .action(
     async (
       dir: string,
@@ -340,6 +347,7 @@ program
         model?: string;
         reasoner?: string;
         timestamped?: "assemblyai" | "elevenlabs" | "whisper-groq" | "none";
+        language?: string;
       },
     ) => {
       let level = parseInt(opts.level, 10) as 1 | 2 | 3;
@@ -367,6 +375,7 @@ program
           model: opts.model,
           reasoner: opts.reasoner,
           timestampedProvider: opts.timestamped,
+          language: opts.language,
         },
       });
     },
