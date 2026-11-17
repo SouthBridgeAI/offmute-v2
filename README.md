@@ -150,7 +150,12 @@ the seams that actually determine day-to-day quality:
   into another speaker's turn, word-level timing exposes the foreign voice and the segment is
   split at the exact word.
 - **Chunk seams never double-print.** Segments are ownership-partitioned across chunk overlaps,
-  and boundary-spanning duplicates are trimmed word-by-word.
+  and boundary-spanning duplicates are trimmed word-by-word. Each chunk's own timestamps are
+  moved onto the ASR's clock first, so a chunk whose clock runs early keeps its opening lines.
+- **A chunk that comes back short is redone.** Every chunk's word count is checked against what
+  the ASR heard in the same stretch. A reply that stopped early, a `[silence]` placeholder over
+  real talk, or a repetition loop leaves too few words; the chunk is transcribed again in two
+  halves and the fuller version kept.
 - **Nothing silently goes stale.** Every stage caches to disk, keyed on the input file _and_ the
   config — change the model and the cache invalidates itself. Re-run for a new format and it's
   ~2 seconds and $0.00. Kill it mid-run and it resumes where it stopped.
@@ -182,8 +187,8 @@ An honest tool tells you what it's about to spend:
 - **lifetime accounting** — `offmute-v2 stats` shows hours processed, characters produced, and
   cost by model, accumulated in `~/.offmute`
 
-Typical numbers: a 30-minute meeting on the default (best) model runs ≈ **$0.30–0.45**;
-`--model gemini-3.5-flash` cuts that ~4× with quality that holds up remarkably well.
+Typical numbers: a 30-minute meeting on the default model runs ≈ **$0.40–0.80**, thinking tokens
+included; `--model gemini-3.8-flash` costs about a third as much until its price rises on 1 Jan 2027.
 
 ## Fix a name in two seconds
 
@@ -211,7 +216,8 @@ offmute-v2 <input> [options]      # transcribe (default command)
 | `--summary`                             | off                      | also write TL;DR / decisions / action items                     |
 | `--instructions <text>`                 | –                        | guide the ear: _"the host is Alice; spell it Xiao, not Shao"_   |
 | `--speakers <names>`                    | –                        | who was in the room (helps naming; comma-separated)             |
-| `--model <name>`                        | `gemini-3.1-pro-preview` | `gemini-3.5-flash` for ~4× cheaper/faster                       |
+| `--model <name>`                        | `gemini-3.1-pro-preview` | `gemini-4-hydrogen` same cost · `gemini-3.8-flash` ~⅓ the cost  |
+| `--language <code>`                     | detected by the ASR      | the recording's language, e.g. `ko`, `ml`, `hi`                  |
 | `--timestamped <p>`                     | `assemblyai`             | `elevenlabs` (Scribe v2) · `whisper-groq` (free) · `none`       |
 | `--reasoner <name>`                     | `deepseek-chat`          | naming/summary model — DeepSeek, Gemini, GLM, Kimi, GPT, Claude |
 | `--level <1                             | 2                        | 3>`                                                             | `3` | 1 separation · 2 anonymous-consistent · 3 **verified names** |
@@ -259,8 +265,11 @@ the pure fusion core ships as `offmute-v2/browser` (fetch providers + optional f
   recording's filename and your `--instructions` both feed the namer; `rename` fixes stragglers.
 - **Network blips** → every upload retries with backoff for ~90s; if a run still dies, re-running
   resumes from cache and re-pays nothing that finished.
-- **It costs money** — roughly a dollar an hour of audio on the best models, a quarter of that on
+- **It costs money** — roughly a dollar an hour of audio on the best models, a third of that on
   flash. The estimate prints before anything is spent.
+- **A language the ASR mishears** → AssemblyAI now detects each file's language, but if the ASR
+  still hears almost nothing, offmute says so and times the lines from the LLM alone;
+  `--language ko` (or `ml`, `hi`, …) pins the language.
 
 ## Requirements
 
