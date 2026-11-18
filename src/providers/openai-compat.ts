@@ -26,13 +26,57 @@ export interface ChatOptions {
   logKind?: string;
 }
 
+/** The text-reasoning surface the naming and summary passes use. Implemented by
+ * OpenAICompatClient (DeepSeek, OpenAI, GLM, Kimi, Claude, …) and GeminiChatClient
+ * (Gemini over its native API). */
+export interface ChatClient {
+  chat(
+    model: string | undefined,
+    messages: ChatMessage[],
+    opts?: ChatOptions,
+  ): Promise<ChatResult>;
+  chatJson<T = unknown>(
+    model: string | undefined,
+    messages: ChatMessage[],
+    opts?: ChatOptions,
+  ): Promise<{ data: T | null; raw: string; error?: string }>;
+}
+
+/** `chatJson` on top of any client's `chat`. A malformed or truncated JSON response is a
+ * per-sample failure, not a hard error: one fresh resample usually fixes it (network
+ * retries live inside chat()). */
+export async function chatJsonWith<T>(
+  client: Pick<ChatClient, "chat">,
+  model: string | undefined,
+  messages: ChatMessage[],
+  opts: ChatOptions,
+): Promise<{ data: T | null; raw: string; error?: string }> {
+  let lastRaw = "";
+  let lastError: string | undefined;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const res = await client.chat(model, messages, { ...opts, responseJson: true });
+    lastRaw = res.text;
+    lastError = res.error;
+    if (res.error || !res.text) continue;
+    try {
+      let txt = res.text.trim();
+      const fence = txt.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
+      if (fence && fence[1]) txt = fence[1];
+      return { data: JSON.parse(txt) as T, raw: res.text };
+    } catch (err) {
+      lastError = `JSON parse: ${err instanceof Error ? err.message : String(err)}`;
+    }
+  }
+  return { data: null, raw: lastRaw, error: lastError };
+}
+
 const PROVIDER_BASE: Record<string, string> = {
   deepseek: "https://api.deepseek.com/v1",
   groq: "https://api.groq.com/openai/v1",
   openai: "https://api.openai.com/v1",
 };
 
-export class OpenAICompatClient {
+export class OpenAICompatClient implements ChatClient {
   constructor(
     private baseUrl: string,
     private apiKey: string,
@@ -145,29 +189,11 @@ export class OpenAICompatClient {
     return { text: "", usage: { inputTokens: 0, outputTokens: 0 }, error: lastError };
   }
 
-  async chatJson<T = unknown>(
+  chatJson<T = unknown>(
     model: string | undefined,
     messages: ChatMessage[],
     opts: ChatOptions = {},
   ): Promise<{ data: T | null; raw: string; error?: string }> {
-    // A malformed/truncated JSON response is a per-sample failure, not a hard error —
-    // one fresh resample usually fixes it (network retries live inside chat()).
-    let lastRaw = "";
-    let lastError: string | undefined;
-    for (let attempt = 0; attempt < 2; attempt++) {
-      const res = await this.chat(model, messages, { ...opts, responseJson: true });
-      lastRaw = res.text;
-      lastError = res.error;
-      if (res.error || !res.text) continue;
-      try {
-        let txt = res.text.trim();
-        const fence = txt.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
-        if (fence && fence[1]) txt = fence[1];
-        return { data: JSON.parse(txt) as T, raw: res.text };
-      } catch (err) {
-        lastError = `JSON parse: ${err instanceof Error ? err.message : String(err)}`;
-      }
-    }
-    return { data: null, raw: lastRaw, error: lastError };
+    return chatJsonWith<T>(this, model, messages, opts);
   }
 }

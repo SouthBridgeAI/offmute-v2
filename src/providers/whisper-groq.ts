@@ -25,7 +25,10 @@ export class WhisperGroqClient {
     private baseUrl = "https://api.groq.com/openai/v1",
   ) {}
 
-  async transcribe(audio: Blob | ArrayBuffer | Uint8Array): Promise<TimestampedResult> {
+  async transcribe(
+    audio: Blob | ArrayBuffer | Uint8Array,
+    opts: { language?: string } = {},
+  ): Promise<TimestampedResult> {
     const blob =
       audio instanceof Blob ? audio : new Blob([audio], { type: "audio/mpeg" });
     const form = new FormData();
@@ -34,6 +37,7 @@ export class WhisperGroqClient {
     form.append("response_format", "verbose_json");
     form.append("timestamp_granularities[]", "word");
     form.append("timestamp_granularities[]", "segment");
+    if (opts.language) form.append("language", opts.language);
 
     const res = await fetch(`${this.baseUrl}/audio/transcriptions`, {
       method: "POST",

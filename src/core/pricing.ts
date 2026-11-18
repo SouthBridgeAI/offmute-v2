@@ -7,25 +7,69 @@
  */
 import type { LlmUsageRecord } from "../providers/llm-log.js";
 
-export const PRICES_AS_OF = "2026-07";
+export const PRICES_AS_OF = "2026-11-17";
 
-/** USD per 1M tokens. `audioIn` falls back to `textIn` when a model prices uniformly. */
+/** USD per 1M tokens. `audioIn` falls back to `textIn` when a model prices uniformly.
+ * Output prices cover thinking tokens, which are billed as output. */
 interface ModelPrice {
   textIn: number;
   audioIn?: number;
   out: number;
 }
 
-const MODEL_PRICES: Record<string, ModelPrice> = {
-  // Gemini (ai.google.dev/gemini-api/docs/pricing, standard tier, <=200k prompts)
-  "gemini-3.1-pro-preview": { textIn: 2.0, out: 12.0 },
-  "gemini-3-pro-preview": { textIn: 2.0, out: 12.0 },
-  "gemini-3.5-flash": { textIn: 1.5, out: 9.0 },
+/** A price that changes on a known date: `until` is the last day (UTC) of the first price. */
+interface DatedPrice {
+  until: string;
+  price: ModelPrice;
+  then: ModelPrice;
+}
+
+// Gemini: ai.google.dev/gemini-api/docs/pricing, standard tier, read 2026-11-17.
+const MODEL_PRICES: Record<string, ModelPrice | DatedPrice> = {
+  "gemini-4-hydrogen": { textIn: 1.5, out: 7.5 },
+  "gemini-4-argon": {
+    until: "2026-11-30",
+    price: { textIn: 2.0, out: 10.0 },
+    then: { textIn: 4.0, out: 20.0 },
+  },
+  "gemini-4-carbon": {
+    until: "2026-11-30",
+    price: { textIn: 2.0, out: 10.0 },
+    then: { textIn: 4.0, out: 20.0 },
+  },
+  "gemini-3.1-pro-preview": { textIn: 2.0, out: 12.0 }, // ≤200k-token prompts
+  "gemini-3.8-flash": {
+    until: "2026-12-31",
+    price: { textIn: 0.75, out: 3.75 },
+    then: { textIn: 1.5, out: 7.5 },
+  },
+  "gemini-3.6-flash": {
+    until: "2026-12-31",
+    price: { textIn: 0.75, out: 3.75 },
+    then: { textIn: 1.5, out: 7.5 },
+  },
+  // Deprecated 2026-10-08; requests are served by gemini-3.6-flash (priced as such).
+  "gemini-3.5-flash": {
+    until: "2026-12-31",
+    price: { textIn: 0.75, out: 3.75 },
+    then: { textIn: 1.5, out: 7.5 },
+  },
+  "gemini-3.5-flash-lite": { textIn: 0.3, out: 2.5 },
   "gemini-3-flash-preview": { textIn: 0.5, audioIn: 1.0, out: 3.0 },
-  "gemini-2.5-pro": { textIn: 1.25, out: 10.0 },
-  "gemini-2.5-flash": { textIn: 0.3, audioIn: 1.0, out: 2.5 },
+  // From 2026-12-01 Google serves (and bills) 2.5 Pro as 3.8 Flash and 2.5 Flash as 3.5 Flash-Lite.
+  "gemini-2.5-pro": {
+    until: "2026-11-30",
+    price: { textIn: 1.25, out: 10.0 },
+    then: { textIn: 1.5, out: 7.5 },
+  },
+  "gemini-2.5-flash": {
+    until: "2026-11-30",
+    price: { textIn: 0.3, audioIn: 1.0, out: 2.5 },
+    then: { textIn: 0.3, out: 2.5 },
+  },
   "gemini-2.5-flash-lite": { textIn: 0.1, audioIn: 0.3, out: 0.4 },
-  // Moving aliases — priced as their current targets.
+  // Moving aliases. Google hasn't documented their targets since January 2026; these are
+  // the last documented targets' prices, so treat them as estimates.
   "gemini-pro-latest": { textIn: 2.0, out: 12.0 },
   "gemini-flash-latest": { textIn: 1.5, out: 9.0 },
   "gemini-flash-lite-latest": { textIn: 0.25, audioIn: 0.5, out: 1.5 },
@@ -44,14 +88,26 @@ const ASR_HOURLY: Record<string, number> = {
   none: 0,
 };
 
-/** Gemini charges audio at ~32 tokens per second. */
-export const AUDIO_TOKENS_PER_SEC = 32;
+/** Audio tokens billed per second of audio: measured 2026-11-17 on 10-minute chunks,
+ * 25/s on Gemini 3.x (≈15.0k tokens) and 32/s on Gemini 4 (≈19.2k tokens). */
+export function audioTokensPerSec(model: string): number {
+  return model.startsWith("gemini-4") ? 32 : 25;
+}
 
-function priceFor(model: string): ModelPrice | null {
-  if (MODEL_PRICES[model]) return MODEL_PRICES[model];
-  // Prefix match handles dated/preview variants (e.g. -preview-05-2026).
-  const hit = Object.keys(MODEL_PRICES).find((k) => model.startsWith(k));
-  return hit ? MODEL_PRICES[hit]! : null;
+/** Price for a model on a date: an exact id, else the longest id it starts with (dated and
+ * preview variants such as -preview-05-2026; "gemini-2.5-flash-lite-…" must not match
+ * "gemini-2.5-flash"). */
+export function priceFor(model: string, at: Date = new Date()): ModelPrice | null {
+  const key =
+    model in MODEL_PRICES
+      ? model
+      : Object.keys(MODEL_PRICES)
+          .filter((k) => model.startsWith(k))
+          .sort((a, b) => b.length - a.length)[0];
+  if (!key) return null;
+  const p = MODEL_PRICES[key]!;
+  if (!("until" in p)) return p;
+  return at.toISOString().slice(0, 10) <= p.until ? p.price : p.then;
 }
 
 export function asrCost(provider: string, durationSec: number): number | null {
@@ -67,11 +123,21 @@ export interface CostEstimate {
   incomplete: boolean;
 }
 
+/** Output tokens per audio-minute: the median of offmute's 51 runs from September to
+ * November 2026 was ~700 visible tokens; thinking adds to that at LOW (measured on 10-minute
+ * chunks: +15% on 3.1 Pro, +50% on Gemini 4 Hydrogen, none on Argon, Carbon or 3.8 Flash). */
+const OUTPUT_TOK_PER_AUDIO_MIN = 700;
+function thinkingOverhead(model: string): number {
+  if (model.startsWith("gemini-4-hydrogen")) return 0.5;
+  if (model.includes("pro")) return 0.15;
+  return 0;
+}
+
 /**
  * Predict the cost of a run from the media duration and the chosen models.
- * Token model: audio ≈ 32 tok/s (per chunk, overlap re-billed), prompt overhead ≈ 1.5k
- * tok/chunk, output ≈ 150 tok per audio-minute, describe ≈ one ~6-min sample set,
- * identify ≈ 8k in / 1k out.
+ * Token model: audio at the model's tokens/s (per chunk, overlap re-billed), prompt
+ * overhead ≈ 1.5k tok/chunk, output ≈ 700 tok per audio-minute plus thinking, describe ≈
+ * one ~6-min sample set, identify ≈ 8k in / 1k out.
  */
 export function estimateRunCost(opts: {
   durationSec: number;
@@ -97,9 +163,13 @@ export function estimateRunCost(opts: {
     Math.max(0, chunks - 1) * opts.overlapSec +
     Math.min(370, opts.durationSec);
   if (p) {
-    const audioTok = billedAudioSec * AUDIO_TOKENS_PER_SEC;
+    const audioTok = billedAudioSec * audioTokensPerSec(opts.model);
     const promptTok = chunks * 1500;
-    const outTok = (opts.durationSec / 60) * 150 + 1500;
+    const outTok =
+      (opts.durationSec / 60) *
+        OUTPUT_TOK_PER_AUDIO_MIN *
+        (1 + thinkingOverhead(opts.model)) +
+      1500;
     const inRate = p.audioIn ?? p.textIn;
     const llmUsd =
       (audioTok * inRate + promptTok * p.textIn + outTok * p.out) / 1_000_000;
@@ -143,11 +213,13 @@ export interface CostReceipt {
   incomplete: boolean;
 }
 
-/** Compute the actual receipt from collected usage + ASR duration. */
+/** Compute the actual receipt from collected usage + ASR duration. `asrBilled` is false
+ * when this run's timestamped result came from cache — no ASR call was paid for. */
 export function computeReceipt(
   usage: LlmUsageRecord[],
   tsProvider: string,
   durationSec: number,
+  asrBilled = true,
 ): CostReceipt {
   let llmUsd = 0;
   let incomplete = false;
@@ -183,11 +255,12 @@ export function computeReceipt(
       `${model}: ${m.calls} call${m.calls > 1 ? "s" : ""} · ${fmtTok(m.in)} in / ${fmtTok(m.out)} out · $${usd.toFixed(2)}`,
     );
   }
-  const asrUsd = tsProvider === "none" ? 0 : asrCost(tsProvider, durationSec);
+  const asrUsd =
+    tsProvider === "none" || !asrBilled ? 0 : asrCost(tsProvider, durationSec);
   if (asrUsd !== null && tsProvider !== "none") {
     perModel[tsProvider] = asrUsd;
     lines.push(
-      `${tsProvider}: ${(durationSec / 60).toFixed(0)}min · $${asrUsd.toFixed(2)}`,
+      `${tsProvider}: ${(durationSec / 60).toFixed(0)}min · ${asrBilled ? `$${asrUsd.toFixed(2)}` : "cached · $0.00"}`,
     );
   }
   return {

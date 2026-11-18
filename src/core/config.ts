@@ -5,6 +5,8 @@
  * every key can also be injected via the options object. Injected keys always win.
  */
 import type { ChunkPlan } from "./types.js";
+import type { ProgressListener } from "./progress.js";
+import { DEFAULT_TRANSCRIBE_MODEL } from "./models.js";
 import { createHash } from "node:crypto";
 import { basename, dirname, resolve } from "node:path";
 import { statSync } from "node:fs";
@@ -77,6 +79,10 @@ export interface PipelineOptions {
   reasoner?: string;
   /** Timestamped provider. */
   timestampedProvider?: TimestampedProvider;
+  /** Spoken language for the ASR (e.g. "ko", "ml", "hi"). Omitted, each ASR detects one
+   * language per file, which can fail on a meeting full of English loanwords. Changing it
+   * re-runs only the ASR (its cache is keyed by language), not the transcription. */
+  language?: string;
   /** Speaker identification mode: "dual" (two reasoners + adjudication, default) or
    * "single" (one reasoner; the self-introduction tripwire still applies). */
   identifyMode?: "dual" | "single";
@@ -93,6 +99,13 @@ export interface PipelineOptions {
   /** Cooperative cancellation: checked at stage and chunk boundaries. Intermediates
    * written so far stay on disk, so an aborted run resumes where it stopped. */
   signal?: AbortSignal;
+  /** Live progress for a display (see progress.ts). Never affects the output or cache. */
+  onProgress?: ProgressListener;
+  /** Ask providers to keep nothing (default true): every Gemini request carries
+   * `store: false` (Google stores requests by default for paid projects created after
+   * 26 Oct 2026) and uploaded audio is deleted after each call; AssemblyAI's transcript
+   * is deleted once offmute has saved its own copy. False leaves providers' defaults. */
+  zeroStorage?: boolean;
 }
 
 export type OutputFormat = "srt" | "md" | "json" | "txt" | "html";
@@ -118,26 +131,6 @@ export const DEFAULT_PASSES: Pass[] = [
   "consistency",
   "finalize",
 ];
-
-/** Model presets. Names map to provider + model strings. */
-export const MODELS = {
-  gemini25Pro: "gemini-2.5-pro",
-  gemini25Flash: "gemini-2.5-flash",
-  gemini3Pro: "gemini-3-pro-preview",
-  gemini31Pro: "gemini-3.1-pro-preview",
-  geminiFlashLatest: "gemini-flash-latest",
-  deepseek: "deepseek-chat",
-  deepseekReasoner: "deepseek-reasoner",
-  gpt4o: "gpt-4o",
-  claudeSonnet: "claude-sonnet-4-5",
-} as const;
-
-/** Default model for each role (used when --model/--reasoner not passed).
- * Gemini 3.1 Pro is the default for best diarization/tone quality; its thinking is tamed
- * per-model (see resolveThinking) so it stays practical for transcription. Use
- * `--model gemini-2.5-flash` / `gemini-flash-latest` for faster/cheaper runs. */
-export const DEFAULT_TRANSCRIBE_MODEL = MODELS.gemini31Pro;
-export const DEFAULT_REASONER_MODEL = MODELS.deepseek;
 
 /** Resolve API keys: injected > env. */
 export function resolveKeys(injected?: ApiKeys): ApiKeys {
@@ -171,7 +164,9 @@ export function resolveOptions(
     | "model"
     | "reasoner"
     | "timestampedProvider"
+    | "language"
     | "signal"
+    | "onProgress"
   >
 > &
   Pick<
@@ -183,7 +178,9 @@ export function resolveOptions(
     | "model"
     | "reasoner"
     | "timestampedProvider"
+    | "language"
     | "signal"
+    | "onProgress"
   > {
   return {
     input: opts.input,
@@ -222,12 +219,15 @@ export function resolveOptions(
     model: opts.model,
     reasoner: opts.reasoner,
     timestampedProvider: opts.timestampedProvider,
+    language: opts.language,
     force: opts.force ?? false,
     onlyChunk: opts.onlyChunk,
     showProgress: opts.showProgress ?? true,
     llmLog: opts.llmLog ?? true,
     logLevel: opts.logLevel ?? "info",
     signal: opts.signal,
+    onProgress: opts.onProgress,
+    zeroStorage: opts.zeroStorage ?? true,
   };
 }
 
@@ -278,13 +278,16 @@ export function inputSignature(input: string): string {
  * serve the previous config's output (e.g. switching to a `pro` model but getting the
  * `flash` transcript back). Options that don't affect intermediates (formats, outputDir,
  * concurrency, logging) are deliberately excluded so they don't trigger needless reruns.
+ *
+ * Identify-only options (`reasoner`, `knownSpeakers`, `identifyMode`) are excluded too:
+ * they never reach the describe / transcribe / ASR stages, and the identify stage keys
+ * its own cache on them (`identified.json` → `config`). Including them here made a
+ * naming-only change (e.g. `--reasoner claude-sonnet-4-5`) re-transcribe everything.
  */
 export function configSignature(o: PipelineOptions): string {
   const relevant = {
     model: o.model ?? DEFAULT_TRANSCRIBE_MODEL,
-    reasoner: o.reasoner ?? DEFAULT_REASONER_MODEL,
     instructions: o.instructions ?? "",
-    knownSpeakers: o.knownSpeakers ?? [],
     chunkDurationSec: o.chunkDurationSec ?? 600,
     chunkOverlapSec: o.chunkOverlapSec ?? 60,
     screenshotCount: o.screenshotCount ?? 6,

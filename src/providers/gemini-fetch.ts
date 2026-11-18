@@ -3,12 +3,21 @@
  * Sends audio as inline base64 (inlineData), which suits chunk-sized files
  * (≤ ~20MB). For larger files, chunk first (ffmpeg.wasm in browser, ffmpeg in node).
  */
-import type { GeminiUsage } from "./gemini.js";
+import { usageFromMetadata, type GeminiUsage } from "./gemini-usage.js";
+import {
+  fallbackThinking,
+  isThinkingConfigError,
+  maxNonStreamingOutput,
+  resolveThinking,
+} from "./gemini-models.js";
 
 export interface GeminiFetchOptions {
   apiKey: string;
   /** Override base URL (e.g. a proxy). */
   baseUrl?: string;
+  /** Ask Google to store nothing (default true): a top-level `store: false` on every
+   * request (see GeminiClientOptions.zeroStorage). */
+  zeroStorage?: boolean;
 }
 
 export interface GeminiFetchGenerateOptions {
@@ -60,10 +69,12 @@ export function toBase64(data: ArrayBuffer | Uint8Array): string {
 export class GeminiFetchClient {
   private apiKey: string;
   private baseUrl: string;
+  private zeroStorage: boolean;
 
   constructor(opts: GeminiFetchOptions) {
     this.apiKey = opts.apiKey;
     this.baseUrl = opts.baseUrl ?? "https://generativelanguage.googleapis.com/v1beta";
+    this.zeroStorage = opts.zeroStorage ?? true;
   }
 
   /** Generate from a prompt + inline file parts (ArrayBuffer + mimeType). */
@@ -81,20 +92,27 @@ export class GeminiFetchClient {
     }
     parts.push({ text: prompt });
 
-    const body: Record<string, unknown> = {
-      contents: [{ role: "user", parts }],
-      generationConfig: {
-        maxOutputTokens: opts.maxOutputTokens ?? 65536,
-        temperature: opts.temperature ?? 0.2,
-      },
+    const generationConfig: Record<string, unknown> = {
+      // A plain (non-streaming) REST call: Argon and Carbon reject more than 32,768 here.
+      maxOutputTokens: Math.min(
+        opts.maxOutputTokens ?? 65536,
+        maxNonStreamingOutput(model),
+      ),
+      temperature: opts.temperature ?? 0.2,
     };
     if (opts.responseSchema) {
-      (body.generationConfig as Record<string, unknown>).responseMimeType =
-        "application/json";
-      (body.generationConfig as Record<string, unknown>).responseSchema =
-        opts.responseSchema;
+      generationConfig.responseMimeType = "application/json";
+      generationConfig.responseSchema = opts.responseSchema;
     }
+    let thinking = resolveThinking(model);
+    if (thinking) generationConfig.thinkingConfig = thinking;
+    const body: Record<string, unknown> = {
+      contents: [{ role: "user", parts }],
+      generationConfig,
+    };
     if (opts.systemInstruction) body.systemInstruction = opts.systemInstruction;
+    // Top level only: inside generationConfig the API rejects `store` (400).
+    if (this.zeroStorage) body.store = false;
 
     let lastError: string | undefined;
     for (let attempt = 0; attempt < maxRetries; attempt++) {
@@ -113,25 +131,20 @@ export class GeminiFetchClient {
         }
         const data = (await res.json()) as {
           candidates?: { content?: { parts?: { text?: string }[] } }[];
-          usageMetadata?: {
-            promptTokenCount?: number;
-            candidatesTokenCount?: number;
-            totalTokenCount?: number;
-          };
+          usageMetadata?: Parameters<typeof usageFromMetadata>[0];
         };
         const text =
           data.candidates?.[0]?.content?.parts?.map((p) => p.text || "").join("") ?? "";
-        const u = data.usageMetadata || {};
-        return {
-          text,
-          usage: {
-            inputTokens: u.promptTokenCount ?? 0,
-            outputTokens: u.candidatesTokenCount ?? 0,
-            totalTokens: u.totalTokenCount ?? 0,
-          },
-        };
+        return { text, usage: usageFromMetadata(data.usageMetadata) };
       } catch (err) {
         lastError = err instanceof Error ? err.message : String(err);
+        // A model that rejects the thinking config gets the next one down (or none).
+        if (thinking && isThinkingConfigError(lastError)) {
+          thinking = fallbackThinking(thinking);
+          if (thinking) generationConfig.thinkingConfig = thinking;
+          else delete generationConfig.thinkingConfig;
+          continue;
+        }
         if (attempt < maxRetries - 1)
           await new Promise((r) => setTimeout(r, 1500 * (attempt + 1)));
       }

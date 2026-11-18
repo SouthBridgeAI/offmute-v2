@@ -11,7 +11,6 @@ import type { Segment } from "../core/types.js";
 import { tokenize } from "../align/normalize.js";
 
 const MIN_DUR = 0.5;
-const MAX_DUR = 7.0;
 const OVERLAP_GAP = 0.05; // 50ms gap between adjacent blocks
 
 /** Jaccard similarity on normalized token sets. */
@@ -199,31 +198,24 @@ export function fixOverlaps(segments: Segment[]): Segment[] {
   return sorted;
 }
 
-/** Clamp each block's duration to [MIN_DUR, MAX_DUR], then re-check overlaps. */
+/** Extend each too-short block to MIN_DUR, then re-check overlaps. Long blocks keep their
+ * real end: SRT cue length is the formatter's job (it splits turns into ≤7 s cues), and a
+ * clamped `end` misreported 28% of segments in JSON and library output. */
 export function clampAndFix(segments: Segment[]): Segment[] {
   for (const s of segments) {
-    const dur = s.end - s.start;
-    if (dur < MIN_DUR) s.end = s.start + MIN_DUR;
-    else if (dur > MAX_DUR) s.end = s.start + MAX_DUR;
+    if (s.end - s.start < MIN_DUR) s.end = s.start + MIN_DUR;
   }
   // Final re-check: clamping may have re-introduced overlaps (ipgu's known gap).
   return fixOverlaps(segments);
 }
 
-export interface FinalizeOptions {
-  /** Drop segments shorter than this (seconds). */
-  minSegmentSec?: number;
-}
-
-/** Convert aligned+consistent segments into the final Segment list (renumbered, deduped, clamped). */
-export function finalizeSegments(
-  segments: AlignedSegment[],
-  opts: FinalizeOptions = {},
-): Segment[] {
-  const minSeg = opts.minSegmentSec ?? 0.2;
-  let deduped = dedupSegments(trimSeamOverlaps(segments));
-  // Drop trivially short / empty segments.
-  deduped = deduped.filter((s) => s.end - s.start >= minSeg && s.text.trim().length > 0);
+/** Convert aligned+consistent segments into the final Segment list (renumbered, deduped,
+ * clamped). Segments are dropped only when they have no text: a one-word interjection the
+ * aligner could only place at a point in time is still something somebody said. */
+export function finalizeSegments(segments: AlignedSegment[]): Segment[] {
+  const deduped = dedupSegments(trimSeamOverlaps(segments)).filter(
+    (s) => s.text.trim().length > 0,
+  );
 
   const out: Segment[] = deduped.map((s, i) => ({
     id: i + 1,

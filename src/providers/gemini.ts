@@ -2,24 +2,32 @@
  * Gemini provider (multimodal). Handles file upload + processing poll, text and
  * structured-JSON generation, retries, token tracking, and uploaded-file cleanup.
  *
- * Uses `@google/genai` v1 SDK. Audio is uploaded via the Files API (supports large
- * files) and referenced by URI in the generate request.
+ * Uses the `@google/genai` v2 SDK (2.31 or later sends `store` on generateContent). Audio
+ * is uploaded via the Files API (supports large files) and referenced by URI in the
+ * generate request; every uploaded file is deleted when its call finishes.
  */
-import { GoogleGenAI, type File, type Part } from "@google/genai";
+import {
+  GoogleGenAI,
+  type File,
+  type GenerateContentResponseUsageMetadata,
+  type Part,
+} from "@google/genai";
 import { basename } from "node:path";
 import { logger } from "../utils/logger.js";
 import { logLlmCall } from "./llm-log.js";
 import { withRetry } from "../utils/retry.js";
+import { usageFromMetadata, type GeminiUsage } from "./gemini-usage.js";
+import {
+  fallbackThinking,
+  isThinkingConfigError,
+  resolveThinking,
+} from "./gemini-models.js";
+
+export type { GeminiUsage };
 
 export interface GeminiFileInput {
   path: string;
   mimeType?: string;
-}
-
-export interface GeminiUsage {
-  inputTokens: number;
-  outputTokens: number;
-  totalTokens: number;
 }
 
 export interface GeminiGenerateOptions {
@@ -29,12 +37,19 @@ export interface GeminiGenerateOptions {
   maxOutputTokens?: number;
   /** Force JSON output with this schema. */
   responseSchema?: Record<string, unknown>;
+  /** Force JSON output without a schema (ignored when responseSchema is set). */
+  responseJson?: boolean;
   /** System instruction. */
   systemInstruction?: string;
   /** What this call is for (logged): describe | transcribe | identify | … */
   logKind?: string;
   /** Chunk index (logged, for transcription calls). */
   logChunk?: number;
+  /** Checked against the accumulated text while the response streams; return a reason
+   * to abort (e.g. a degenerate repetition loop). The call then fails fast with
+   * `aborted: <reason>` instead of running to maxOutputTokens, and is NOT retried here —
+   * repeating the identical request would likely loop again; the caller decides. */
+  shouldAbort?: (textSoFar: string) => string | null;
 }
 
 export interface GeminiResult {
@@ -78,43 +93,26 @@ function detectMime(path: string): string {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-/**
- * Per-model "thinking" configuration. The control is NOT uniform across the Gemini family,
- * and the wrong/default level makes some models (esp. 3.x **pro**) over-think long audio —
- * e.g. ~7x slower for transcription, which doesn't benefit from heavy reasoning. We tame it:
- *  - gemini-2.5-*  → `thinkingBudget` (flash can disable with 0; pro can't fully disable → 128)
- *  - gemini-3.x / *-latest → `thinkingLevel` (pro can't take MINIMAL → floor to LOW; flash MINIMAL)
- *  - gemini-2.0-*  → no thinking control
- * Returns the `thinkingConfig` fragment, or undefined when the model takes none.
- */
-export function resolveThinking(model: string): Record<string, unknown> | undefined {
-  const m = model.toLowerCase();
-  if (m.includes("gemini-2.0")) return undefined;
-  if (m.includes("gemini-2.5")) {
-    return { thinkingBudget: m.includes("pro") ? 128 : 0 };
-  }
-  // 3.x (incl. gemini-3-*, gemini-3.1-*) and moving aliases like gemini-flash-latest /
-  // gemini-pro-latest use thinkingLevel. Pro rejects MINIMAL, so floor it to LOW.
-  if (m.includes("gemini-3") || m.includes("flash-latest") || m.includes("pro-latest")) {
-    return { thinkingLevel: m.includes("pro") ? "LOW" : "MINIMAL" };
-  }
-  return undefined;
-}
-
-/** Whether an error message looks like the model rejected our thinking config. */
-export function isThinkingConfigError(message: string | undefined): boolean {
-  if (!message) return false;
-  return (
-    /thinking/i.test(message) &&
-    /(not supported|invalid|unsupported|unknown name|unexpected)/i.test(message)
-  );
+export interface GeminiClientOptions {
+  /** Ask Google to store nothing (default true): every request carries a top-level
+   * `store: false`. Paid projects created on or after 26 Oct 2026 keep generateContent
+   * requests for 55 days unless told not to. False sends no `store` field, leaving the
+   * project's own setting. */
+  zeroStorage?: boolean;
+  /** API endpoint override (a proxy, or a local server in tests). */
+  baseUrl?: string;
 }
 
 export class GeminiClient {
   private ai: GoogleGenAI;
+  private zeroStorage: boolean;
 
-  constructor(apiKey: string) {
-    this.ai = new GoogleGenAI({ apiKey });
+  constructor(apiKey: string, opts: GeminiClientOptions = {}) {
+    this.ai = new GoogleGenAI({
+      apiKey,
+      ...(opts.baseUrl ? { httpOptions: { baseUrl: opts.baseUrl } } : {}),
+    });
+    this.zeroStorage = opts.zeroStorage ?? true;
   }
 
   /** Upload a file and wait until it's done processing. Uploads ride one long HTTP
@@ -167,14 +165,19 @@ export class GeminiClient {
         maxOutputTokens,
         temperature,
       };
+      // The SDK sends this at the request's top level, where the API reads it; inside
+      // generationConfig the API rejects it (400).
+      if (this.zeroStorage) config.store = false;
       if (responseSchema) {
         config.responseMimeType = "application/json";
         config.responseSchema = responseSchema;
+      } else if (opts.responseJson) {
+        config.responseMimeType = "application/json";
       }
       if (systemInstruction) config.systemInstruction = systemInstruction;
       // Tame per-model thinking (keeps pro fast for transcription). Dropped automatically
       // if a model rejects it (see the catch below).
-      const thinking = resolveThinking(model);
+      let thinking = resolveThinking(model);
       if (thinking) config.thinkingConfig = thinking;
 
       const parts: Part[] = uploaded.map((f) => ({
@@ -186,21 +189,36 @@ export class GeminiClient {
       for (let attempt = 0; attempt < maxRetries; attempt++) {
         const t0 = Date.now();
         try {
-          const response = await this.ai.models.generateContent({
+          // Streamed so the connection never sits silent: a non-streaming call sends no
+          // response headers until generation finishes, and Node's fetch (undici) fails any
+          // request whose headers take longer than 300s ("fetch failed") — long chunks and
+          // runaway generations died there and were retried from scratch (field report 1).
+          const controller = new AbortController();
+          const stream = await this.ai.models.generateContentStream({
             model,
             contents: [{ role: "user", parts }],
-            config,
+            config: { ...config, abortSignal: controller.signal },
           });
-          const usage = response.usageMetadata || {};
-          const text = response.text ?? "";
-          const result = {
-            text,
-            usage: {
-              inputTokens: usage.promptTokenCount ?? 0,
-              outputTokens: usage.candidatesTokenCount ?? 0,
-              totalTokens: usage.totalTokenCount ?? 0,
-            },
-          };
+          let text = "";
+          let usageMeta: GenerateContentResponseUsageMetadata | undefined;
+          let abortReason: string | null = null;
+          for await (const chunk of stream) {
+            text += chunk.text ?? "";
+            if (chunk.usageMetadata) usageMeta = chunk.usageMetadata;
+            abortReason = opts.shouldAbort?.(text) ?? null;
+            if (abortReason) {
+              controller.abort();
+              break;
+            }
+          }
+          const usage = usageFromMetadata(usageMeta);
+          const error = abortReason ? `aborted: ${abortReason}` : undefined;
+          if (error) {
+            logger.warn(
+              `[gemini] ${opts.logKind ?? "call"}${opts.logChunk !== undefined ? ` chunk ${opts.logChunk}` : ""} ${error} after ${text.length} chars`,
+            );
+          }
+          // Usage is logged for aborted calls too: the tokens streamed so far were paid for.
           logLlmCall({
             ts: new Date(t0).toISOString(),
             provider: "gemini",
@@ -209,20 +227,24 @@ export class GeminiClient {
             chunk: opts.logChunk,
             prompt,
             response: text,
-            usage: result.usage,
+            usage,
             durationMs: Date.now() - t0,
             attempt: attempt + 1,
+            ...(error ? { error } : {}),
           });
-          return result;
+          return error ? { text, usage, error } : { text, usage };
         } catch (err) {
           lastError = err instanceof Error ? err.message : String(err);
-          // If the model rejected our thinking config, drop it for all subsequent attempts
-          // and retry (the next attempt then runs without any thinkingConfig).
-          if (config.thinkingConfig && isThinkingConfigError(lastError)) {
-            delete config.thinkingConfig;
+          // If the model rejected our thinking config, step it up (MINIMAL → LOW) or drop
+          // it for all subsequent attempts, and retry.
+          if (thinking && isThinkingConfigError(lastError)) {
+            const next = fallbackThinking(thinking);
             logger.warn(
-              `[gemini] model ${model} rejected thinking config — retrying without it`,
+              `[gemini] model ${model} rejected thinking config ${JSON.stringify(thinking)} — retrying ${next ? `with ${JSON.stringify(next)}` : "without it"}`,
             );
+            thinking = next;
+            if (thinking) config.thinkingConfig = thinking;
+            else delete config.thinkingConfig;
             continue;
           }
           logger.warn(

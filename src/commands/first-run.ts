@@ -8,6 +8,12 @@ import { join } from "node:path";
 import chalk from "chalk";
 import { resolveKeys } from "../core/config.js";
 import { statsDir } from "../core/stats.js";
+import { DEFAULT_TRANSCRIBE_MODEL, PRO_TRANSCRIBE_MODEL } from "../core/models.js";
+
+/** What a version changed for someone upgrading, shown on its first run. */
+const WHATS_NEW: Record<string, string> = {
+  "0.2.0": `transcribes with ${DEFAULT_TRANSCRIBE_MODEL} (--pro: ${PRO_TRANSCRIBE_MODEL}), asks providers to keep nothing (--no-zero-storage turns that off), and a stopped run picks up where it left off`,
+};
 
 export function maybeFirstRunCheck(version: string): boolean {
   let last: string | null = null;
@@ -34,6 +40,8 @@ export function maybeFirstRunCheck(version: string): boolean {
       `first run of ${chalk.reset.bold(version)}${chalk.dim(" — checking your setup (offline; `offmute-v2 doctor` pings live)")}`,
     ),
   );
+  const news = WHATS_NEW[version];
+  if (news) lines.push(`  ${chalk.cyan("new")} ${chalk.dim(news)}`);
   lines.push(
     `  ${have(keys.gemini)} GEMINI_API_KEY        ${chalk.dim("transcription — required")}`,
   );
@@ -64,7 +72,9 @@ export function maybeFirstRunCheck(version: string): boolean {
       "add ELEVENLABS_API_KEY to try Scribe v2 — the sharpest speaker separation we've tested on conversational audio",
     );
   if (!keys.deepseek)
-    unlocks.push("add DEEPSEEK_API_KEY so speaker naming costs ~$0.003 a run");
+    unlocks.push(
+      "add DEEPSEEK_API_KEY so speaker naming costs ~$0.003 a run (DeepSeek can't be asked to keep nothing)",
+    );
   for (const u of unlocks.slice(0, 2)) lines.push(chalk.dim(`  unlock: ${u}`));
 
   process.stdout.write(lines.join("\n") + "\n\n");
