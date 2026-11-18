@@ -16,11 +16,20 @@ export interface AssemblyAIFetchResult {
 const BASE = "https://api.assemblyai.com/v2";
 
 export class AssemblyAIFetchClient {
-  constructor(private apiKey: string) {}
+  private zeroStorage: boolean;
+
+  /** `zeroStorage` (default true): delete the transcript from AssemblyAI once its words
+   * are read. AssemblyAI otherwise keeps it for 30 days. */
+  constructor(
+    private apiKey: string,
+    opts: { zeroStorage?: boolean } = {},
+  ) {
+    this.zeroStorage = opts.zeroStorage ?? true;
+  }
 
   async transcribe(
     audio: Blob,
-    opts: { speakersExpected?: number } = {},
+    opts: { speakersExpected?: number; language?: string } = {},
   ): Promise<AssemblyAIFetchResult> {
     // 1. Upload.
     const upRes = await fetch(`${BASE}/upload`, {
@@ -39,6 +48,9 @@ export class AssemblyAIFetchClient {
       speech_model: "universal",
     };
     if (opts.speakersExpected) params.speakers_expected = opts.speakersExpected;
+    // Left unset, AssemblyAI assumes English; without a language, ask it to detect one.
+    if (opts.language) params.language_code = opts.language;
+    else params.language_detection = true;
     const cr = await fetch(`${BASE}/transcript`, {
       method: "POST",
       headers: { authorization: this.apiKey, "content-type": "application/json" },
@@ -101,6 +113,14 @@ export class AssemblyAIFetchClient {
     }
     const words: TimestampedWord[] = (t.words || []).map(toWord);
     const durationSec = words.length ? words[words.length - 1]!.end : 0;
+    if (this.zeroStorage) {
+      // Best effort: the words are already in hand; a failed delete leaves AssemblyAI's
+      // own 30-day expiry.
+      await fetch(`${BASE}/transcript/${t.id}`, {
+        method: "DELETE",
+        headers: { authorization: this.apiKey },
+      }).catch(() => undefined);
+    }
     return {
       utterances,
       words,

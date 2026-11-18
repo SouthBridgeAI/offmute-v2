@@ -5,6 +5,8 @@
  * every key can also be injected via the options object. Injected keys always win.
  */
 import type { ChunkPlan } from "./types.js";
+import type { ProgressListener } from "./progress.js";
+import { DEFAULT_TRANSCRIBE_MODEL } from "./models.js";
 import { createHash } from "node:crypto";
 import { basename, dirname, resolve } from "node:path";
 import { statSync } from "node:fs";
@@ -97,6 +99,13 @@ export interface PipelineOptions {
   /** Cooperative cancellation: checked at stage and chunk boundaries. Intermediates
    * written so far stay on disk, so an aborted run resumes where it stopped. */
   signal?: AbortSignal;
+  /** Live progress for a display (see progress.ts). Never affects the output or cache. */
+  onProgress?: ProgressListener;
+  /** Ask providers to keep nothing (default true): every Gemini request carries
+   * `store: false` (Google stores requests by default for paid projects created after
+   * 26 Oct 2026) and uploaded audio is deleted after each call; AssemblyAI's transcript
+   * is deleted once offmute has saved its own copy. False leaves providers' defaults. */
+  zeroStorage?: boolean;
 }
 
 export type OutputFormat = "srt" | "md" | "json" | "txt" | "html";
@@ -122,30 +131,6 @@ export const DEFAULT_PASSES: Pass[] = [
   "consistency",
   "finalize",
 ];
-
-/** Model presets. Names map to provider + model strings. */
-export const MODELS = {
-  gemini4Hydrogen: "gemini-4-hydrogen",
-  gemini4Argon: "gemini-4-argon",
-  gemini4Carbon: "gemini-4-carbon",
-  gemini38Flash: "gemini-3.8-flash",
-  gemini25Pro: "gemini-2.5-pro",
-  gemini25Flash: "gemini-2.5-flash",
-  gemini3Pro: "gemini-3-pro-preview",
-  gemini31Pro: "gemini-3.1-pro-preview",
-  geminiFlashLatest: "gemini-flash-latest",
-  deepseek: "deepseek-chat",
-  deepseekReasoner: "deepseek-reasoner",
-  gpt4o: "gpt-4o",
-  claudeSonnet: "claude-sonnet-4-5",
-} as const;
-
-/** Default model for each role (used when --model/--reasoner not passed).
- * Gemini 3.1 Pro is the default for diarization/tone quality; its thinking is tamed
- * per-model (see resolveThinking) so it stays practical for transcription. Use
- * `--model gemini-3.8-flash` for cheaper runs, or `gemini-4-hydrogen` at the same cost. */
-export const DEFAULT_TRANSCRIBE_MODEL = MODELS.gemini31Pro;
-export const DEFAULT_REASONER_MODEL = MODELS.deepseek;
 
 /** Resolve API keys: injected > env. */
 export function resolveKeys(injected?: ApiKeys): ApiKeys {
@@ -181,6 +166,7 @@ export function resolveOptions(
     | "timestampedProvider"
     | "language"
     | "signal"
+    | "onProgress"
   >
 > &
   Pick<
@@ -194,6 +180,7 @@ export function resolveOptions(
     | "timestampedProvider"
     | "language"
     | "signal"
+    | "onProgress"
   > {
   return {
     input: opts.input,
@@ -239,6 +226,8 @@ export function resolveOptions(
     llmLog: opts.llmLog ?? true,
     logLevel: opts.logLevel ?? "info",
     signal: opts.signal,
+    onProgress: opts.onProgress,
+    zeroStorage: opts.zeroStorage ?? true,
   };
 }
 

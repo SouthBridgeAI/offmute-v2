@@ -14,12 +14,13 @@ import {
   inputSignature,
   configSignature,
   DEFAULT_PASSES,
-  DEFAULT_TRANSCRIBE_MODEL,
-  DEFAULT_REASONER_MODEL,
   type PipelineOptions,
   type Pass,
   type ApiKeys,
+  type TimestampedProvider,
 } from "./config.js";
+import { DEFAULT_TRANSCRIBE_MODEL, DEFAULT_REASONER_MODEL } from "./models.js";
+import { emitTo, type ProgressEvent, type UnaskedProvider } from "./progress.js";
 import { logger } from "../utils/logger.js";
 import type {
   Segment,
@@ -111,6 +112,14 @@ function has(passes: Pass[], p: Pass): boolean {
   return passes.includes(p);
 }
 
+/** The timing ASRs, by the names people know them. */
+const ASR_NAMES: Record<TimestampedProvider, string> = {
+  assemblyai: "AssemblyAI",
+  elevenlabs: "ElevenLabs Scribe",
+  "whisper-groq": "Groq Whisper",
+  none: "none",
+};
+
 /** Rethrow an error with a stage tag, e.g. "[asr] fetch failed" — so a failure names
  * the part of the pipeline it came from. Original stack preserved. */
 function stageTag(name: string): (err: unknown) => never {
@@ -196,6 +205,9 @@ export async function transcribe(opts: PipelineOptions): Promise<TranscriptResul
   const checkAbort = () => {
     options.signal?.throwIfAborted();
   };
+  const emit = (event: ProgressEvent) => emitTo(options.onProgress, event);
+  // Every Gemini client in this run asks for the same storage behaviour.
+  const geminiOpts = { zeroStorage: options.zeroStorage };
 
   if (!(await checkFfmpeg())) throw new Error("ffmpeg/ffprobe not found in PATH");
   if (!keys.gemini) throw new Error("GEMINI_API_KEY (or GOOGLE_API_KEY) is required");
@@ -230,6 +242,7 @@ export async function transcribe(opts: PipelineOptions): Promise<TranscriptResul
   if (has(passes, "preprocess")) {
     checkAbort();
     logger.info("=== preprocess ===");
+    emit({ type: "stage", stage: "preprocess", state: "start" });
     probeInfo = forceAll ? null : readJson<ProbeResult>(probePath);
     if (!probeInfo) {
       probeInfo = await probe(options.input).catch(stageTag("preprocess"));
@@ -275,6 +288,48 @@ export async function transcribe(opts: PipelineOptions): Promise<TranscriptResul
     `estimated cost ~$${estimate.totalUsd.toFixed(2)}${estimate.incomplete ? " (+unpriced parts)" : ""}  [${estimate.lines.join(" · ")}]`,
   );
 
+  // The text reasoners (speaker naming, the summary), resolved once for the whole run.
+  const naming = options.diarizationLevel >= 3 && has(passes, "identify");
+  const reasonerA =
+    naming || options.summary
+      ? resolveReasoner(options.reasoner ?? DEFAULT_REASONER_MODEL, keys, geminiOpts)
+      : null;
+  const reasonerB =
+    naming && reasonerA && options.identifyMode === "dual"
+      ? resolveSecondReasoner(reasonerA.info, keys, geminiOpts)
+      : null;
+  // Zero storage asks Gemini (store: false on every request) and AssemblyAI (the transcript
+  // is deleted once offmute has its copy). The other providers' APIs have no way to ask, so
+  // the ones this run uses are named rather than counted in.
+  const asksAssemblyAI = willTimestamp && tsProvider === "assemblyai";
+  const notAsked: UnaskedProvider[] = options.zeroStorage
+    ? [
+        ...(willTimestamp &&
+        (tsProvider === "elevenlabs" || tsProvider === "whisper-groq")
+          ? [{ name: ASR_NAMES[tsProvider], role: "timing" as const }]
+          : []),
+        ...[reasonerA, reasonerB].flatMap((r) =>
+          r && r.info.provider !== "gemini"
+            ? [{ name: r.info.model, role: "text" as const }]
+            : [],
+        ),
+      ]
+    : [];
+  if (options.zeroStorage) {
+    logger.info(
+      `zero storage: ${asksAssemblyAI ? "Gemini and AssemblyAI are" : "Gemini is"} asked to keep nothing${notAsked.length ? `; ${notAsked.map((p) => p.name).join(", ")} can't be asked` : ""}`,
+    );
+  }
+  emit({
+    type: "plan",
+    durationSec: duration,
+    model: models.transcribe,
+    asr: ASR_NAMES[tsProvider],
+    estimateUsd: estimate.totalUsd,
+    zeroStorage: options.zeroStorage,
+    notAsked,
+  });
+
   // ---------- 2. TIMESTAMPED (started now; awaited after transcription) ----------
   // The ASR needs only the audio, so it runs alongside describe and the LLM chunks. That
   // hides its latency, and its words are what each chunk's coverage is checked against
@@ -284,8 +339,13 @@ export async function transcribe(opts: PipelineOptions): Promise<TranscriptResul
     words: TimestampedWord[];
     durationSec: number;
     hasDiarization?: boolean;
+    /** The language the ASR transcribed in, when it says (AssemblyAI does). */
+    languageCode?: string;
   };
-  const runTimestamped = async (): Promise<{ result: AsrResult | null; billed: boolean }> => {
+  const runTimestamped = async (): Promise<{
+    result: AsrResult | null;
+    billed: boolean;
+  }> => {
     if (!has(passes, "timestamped") && !has(passes, "align")) {
       const cached = forceAll
         ? null
@@ -300,7 +360,8 @@ export async function transcribe(opts: PipelineOptions): Promise<TranscriptResul
     if (tsProvider === "whisper-groq") {
       logger.info("=== timestamped (Groq Whisper — no diarization) ===");
       // Reuse the compact mono 16kHz mp3 from preprocess (also satisfies Groq's 25MB limit).
-      if (!existsSync(audioPath)) await extractAudio(options.input, audioPath, AUDIO_OPTS);
+      if (!existsSync(audioPath))
+        await extractAudio(options.input, audioPath, AUDIO_OPTS);
       const groq = new WhisperGroqClient(keys.groq!);
       const result = await groq
         .transcribe(await readFile(audioPath), { language: options.language })
@@ -335,12 +396,41 @@ export async function transcribe(opts: PipelineOptions): Promise<TranscriptResul
       apiKey: keys.assemblyai!,
       cacheDir: `${options.intermediatesDir}/assemblyai`,
       language: options.language,
+      zeroStorage: options.zeroStorage,
     });
     const result = await aai.transcribe(audioPath).catch(stageTag("asr"));
     writeJson(`${options.intermediatesDir}/timestamped.json`, result);
     return { result, billed: !aai.lastFromCache };
   };
-  const asrRun = runTimestamped();
+  const asrName = ASR_NAMES[tsProvider];
+  if (willTimestamp && tsProvider !== "none") {
+    emit({ type: "asr", provider: asrName, state: "start" });
+  }
+  const asrRun = runTimestamped().then(
+    (r) => {
+      if (willTimestamp && r.result) {
+        const speakers = new Set(r.result.utterances.map((u) => u.speaker)).size;
+        emit({
+          type: "asr",
+          provider: asrName,
+          state: r.billed ? "done" : "cached",
+          words: r.result.words.length,
+          speakers: speakers || undefined,
+          language: r.result.languageCode,
+        });
+      }
+      return r;
+    },
+    (err: unknown) => {
+      emit({
+        type: "asr",
+        provider: asrName,
+        state: "failed",
+        error: err instanceof Error ? err.message : String(err),
+      });
+      throw err;
+    },
+  );
   // Awaited after transcription. Until then this only keeps an early ASR failure from
   // surfacing as an unhandled rejection while the LLM chunks are still running.
   asrRun.catch(() => undefined);
@@ -350,10 +440,13 @@ export async function transcribe(opts: PipelineOptions): Promise<TranscriptResul
   if (has(passes, "describe")) {
     const descPath = `${options.intermediatesDir}/description.json`;
     description = forceAll ? null : readJson<MeetingDescription>(descPath);
-    if (!description) {
+    if (description) {
+      emit({ type: "stage", stage: "describe", state: "cached" });
+    } else {
       checkAbort();
       logger.info("=== describe ===");
-      const client = new GeminiClient(keys.gemini!);
+      emit({ type: "stage", stage: "describe", state: "start" });
+      const client = new GeminiClient(keys.gemini!, geminiOpts);
       // Sample beginning + middle + end (not just the opening) so speakers who only
       // appear later still make the roster. Short files use one whole-file sample.
       const sampleSpans: [number, number][] =
@@ -420,7 +513,11 @@ export async function transcribe(opts: PipelineOptions): Promise<TranscriptResul
       // hole, or a doubled stretch, of up to ±10 s at every snapped seam.
       chunks = chunks.map((c) => ({
         ...c,
-        start: snapToSilence(c.start, silences, Math.min(10, options.chunkOverlapSec / 2)),
+        start: snapToSilence(
+          c.start,
+          silences,
+          Math.min(10, options.chunkOverlapSec / 2),
+        ),
       }));
     }
   }
@@ -448,14 +545,16 @@ export async function transcribe(opts: PipelineOptions): Promise<TranscriptResul
   let llmChunkPlans: ChunkPlan[] = [];
   if (has(passes, "llm-transcribe")) {
     logger.info("=== llm-transcribe ===");
+    emit({ type: "stage", stage: "transcribe", state: "start" });
     let runChunks = chunks;
     if (options.onlyChunk !== undefined)
       runChunks = chunks.filter((c) => c.index === options.onlyChunk);
     logger.info(
       `${runChunks.length} chunks (${options.chunkDurationSec}s, ${options.chunkOverlapSec}s overlap)`,
     );
+    emit({ type: "chunks", total: runChunks.length, chunkSec: options.chunkDurationSec });
 
-    const client = new GeminiClient(keys.gemini!);
+    const client = new GeminiClient(keys.gemini!, geminiOpts);
     mkdirSync(llmDir, { recursive: true });
 
     // Live partial output: as chunks complete, keep a coarse-timed partial transcript
@@ -492,6 +591,12 @@ export async function transcribe(opts: PipelineOptions): Promise<TranscriptResul
       const cached = forceAll ? null : readJson<ChunkTranscriptionResult>(parsedPath);
       if (cached && cached.segments.length > 0) {
         logger.info(`chunk ${chunk.index}: cached (${cached.segments.length} segments)`);
+        emit({
+          type: "chunk",
+          index: chunk.index,
+          state: "cached",
+          segments: cached.segments.length,
+        });
         completed.push(cached);
         return tagWith(cached, chunk);
       }
@@ -502,6 +607,7 @@ export async function transcribe(opts: PipelineOptions): Promise<TranscriptResul
       logger.info(
         `chunk ${chunk.index}: transcribing [${chunk.start.toFixed(0)}-${chunk.end.toFixed(0)}]s...`,
       );
+      emit({ type: "chunk", index: chunk.index, state: "running" });
       const result = await transcribeChunk(
         client,
         models.transcribe,
@@ -517,6 +623,16 @@ export async function transcribe(opts: PipelineOptions): Promise<TranscriptResul
         { chunkDurationSec: chunk.end - chunk.start, validationRetries: 1 },
       );
       writeJson(parsedPath, result);
+      emit(
+        result.error && result.segments.length === 0
+          ? { type: "chunk", index: chunk.index, state: "failed", error: result.error }
+          : {
+              type: "chunk",
+              index: chunk.index,
+              state: "done",
+              segments: result.segments.length,
+            },
+      );
       writeFileSync(
         `${llmDir}/chunk_${String(chunk.index).padStart(2, "0")}_raw.json`,
         result.raw,
@@ -572,17 +688,30 @@ export async function transcribe(opts: PipelineOptions): Promise<TranscriptResul
     for (let i = 0; i < llmChunkResults.length; i++) {
       const plan = llmChunkPlans[i]!;
       const where = `chunk ${plan.index} [${plan.start.toFixed(0)}-${plan.end.toFixed(0)}]s`;
-      let cov = chunkCoverage(llmChunkResults[i]!.segments, asrResult.words, plan.start, plan.end);
+      let cov = chunkCoverage(
+        llmChunkResults[i]!.segments,
+        asrResult.words,
+        plan.start,
+        plan.end,
+      );
       let status: ChunkQuality["status"] = cov.low ? "low-coverage" : "ok";
       if (cov.low) {
         const retryPath = `${llmDir}/chunk_${String(plan.index).padStart(2, "0")}_retry_parsed.json`;
         let retry = forceAll ? null : readJson<ChunkTranscriptionResult>(retryPath);
+        const span = { index: plan.index, startSec: plan.start, endSec: plan.end };
         if (!retry && has(passes, "llm-transcribe")) {
           checkAbort();
           logger.warn(
             `${where}: ${cov.llmWords} words transcribed where the ASR heard ${cov.asrWords} — transcribing it again in two halves`,
           );
-          client ??= new GeminiClient(keys.gemini!);
+          emit({
+            type: "guard",
+            ...span,
+            state: "retrying",
+            llmWords: cov.llmWords,
+            asrWords: cov.asrWords,
+          });
+          client ??= new GeminiClient(keys.gemini!, geminiOpts);
           retry = await transcribeInHalves({
             client,
             model: models.transcribe,
@@ -601,11 +730,25 @@ export async function transcribe(opts: PipelineOptions): Promise<TranscriptResul
           writeJson(retryPath, retry);
         }
         if (retry) {
-          const again = chunkCoverage(retry.segments, asrResult.words, plan.start, plan.end);
+          const again = chunkCoverage(
+            retry.segments,
+            asrResult.words,
+            plan.start,
+            plan.end,
+          );
           logger.info(
             `${where}: the halves cover ${again.llmWords} words (${again.ratio.toFixed(2)} per ASR word, was ${cov.ratio.toFixed(2)})${again.ratio > cov.ratio ? " — kept" : " — first attempt kept"}`,
           );
-          if (again.ratio > cov.ratio) {
+          const kept = again.ratio > cov.ratio;
+          emit({
+            type: "guard",
+            ...span,
+            state: kept ? "recovered" : "unchanged",
+            llmWords: cov.llmWords,
+            asrWords: cov.asrWords,
+            retryWords: again.llmWords,
+          });
+          if (kept) {
             llmChunkResults[i] = tagWith(retry, plan);
             cov = again;
             status = again.low ? "low-coverage" : "retried";
@@ -706,6 +849,7 @@ export async function transcribe(opts: PipelineOptions): Promise<TranscriptResul
   let aligned: AlignedSegment[] = [];
   if (has(passes, "align") && (asrResult || tsProvider === "none")) {
     logger.info("=== align ===");
+    emit({ type: "stage", stage: "align", state: "start" });
     aligned = alignSegments(allLlmSegments, timingWords, { timeMarginSec: 30 });
     writeJson(`${options.intermediatesDir}/aligned.json`, aligned);
   } else {
@@ -721,7 +865,11 @@ export async function transcribe(opts: PipelineOptions): Promise<TranscriptResul
   // Recover content the LLM dropped: insert ASR fallback segments for uncovered speech.
   // Not from an ASR that missed most of the speech: its words would be the wrong language.
   let gapFilledWords = 0;
-  if (asrResult && !asrMissedSpeech && (has(passes, "align") || has(passes, "consistency"))) {
+  if (
+    asrResult &&
+    !asrMissedSpeech &&
+    (has(passes, "align") || has(passes, "consistency"))
+  ) {
     aligned = fillAsrGaps(aligned, asrResult.words, asrResult.utterances);
     // Only gap-fill produces "timestamped" segments (aligned.json predates this step).
     const added = aligned.filter((a) => a.timingSource === "timestamped");
@@ -750,6 +898,7 @@ export async function transcribe(opts: PipelineOptions): Promise<TranscriptResul
   let speakers: TranscriptResult["speakers"] = [];
   if (has(passes, "consistency") && (asrResult || tsProvider === "none")) {
     logger.info("=== consistency ===");
+    emit({ type: "stage", stage: "speakers", state: "start" });
     const cons = assignGlobalSpeakers(aligned, asrResult?.utterances ?? [], {
       hasDiarization: asrResult ? (asrResult.hasDiarization ?? true) : false,
     });
@@ -787,16 +936,13 @@ export async function transcribe(opts: PipelineOptions): Promise<TranscriptResul
   // Decoupled from DeepSeek and from the describe pass: any reasoner-capable key works
   // (falls back to Gemini, whose key transcription already required), and a missing
   // roster just means less context — not a silently skipped pass.
-  if (options.diarizationLevel >= 3 && has(passes, "identify")) {
-    const reasonerA = resolveReasoner(options.reasoner ?? DEFAULT_REASONER_MODEL, keys);
+  if (naming) {
     if (!reasonerA) {
       logger.warn(
         "identify: no reasoner-capable API key found (DEEPSEEK/GEMINI/OPENAI/…) — skipping speaker naming",
       );
     } else {
       const mode = options.identifyMode;
-      const reasonerB =
-        mode === "dual" ? resolveSecondReasoner(reasonerA.info, keys) : null;
       // Cached naming: a re-run (e.g. for another output format) reuses the verified
       // names instead of re-paying the reasoners. Cached only when it actually named
       // someone — an empty result usually means a transient failure worth retrying.
@@ -831,11 +977,20 @@ export async function transcribe(opts: PipelineOptions): Promise<TranscriptResul
         Object.keys(cachedId.nameMap).length > 0
       ) {
         logger.info("=== identify (cached) ===");
+        emit({ type: "stage", stage: "identify", state: "cached" });
         nameMap = cachedId.nameMap;
       } else {
         logger.info(
           `=== identify (${reasonerA.info.model}${reasonerB ? ` + ${reasonerB.info.model} second opinion` : ""}) ===`,
         );
+        emit({
+          type: "stage",
+          stage: "identify",
+          state: "start",
+          detail: reasonerB
+            ? `${reasonerA.info.model} + ${reasonerB.info.model}`
+            : reasonerA.info.model,
+        });
         checkAbort();
         const id = await identifySpeakersV2(
           {
@@ -864,11 +1019,14 @@ export async function transcribe(opts: PipelineOptions): Promise<TranscriptResul
         ).catch(stageTag("identify"));
         writeJson(idCachePath, { ...id, config: idConfig });
         nameMap = id.nameMap;
+        if (id.allPassesFailed)
+          emit({ type: "stage", stage: "identify", state: "failed" });
       }
       logger.info(
         `identified ${Object.keys(nameMap).length} speakers: ${JSON.stringify(nameMap)}`,
       );
       const nm = nameMap;
+      emit({ type: "names", names: nm });
       segments = segments.map((s) =>
         nm[s.speaker] ? { ...s, speakerName: nm[s.speaker] } : s,
       );
@@ -880,6 +1038,7 @@ export async function transcribe(opts: PipelineOptions): Promise<TranscriptResul
   let finalSegments: Segment[] = [];
   if (has(passes, "finalize")) {
     logger.info("=== finalize ===");
+    emit({ type: "stage", stage: "finalize", state: "start" });
     finalSegments = finalizeSegments(segments);
     writeJson(`${options.intermediatesDir}/final.json`, finalSegments);
   } else {
@@ -918,7 +1077,10 @@ export async function transcribe(opts: PipelineOptions): Promise<TranscriptResul
       inputTokens: receipt.totals.inputTokens,
       outputTokens: receipt.totals.outputTokens,
     },
-    ...(asrResult ? { quality: { chunks: quality, gapFilledWords, asrMissedSpeech } } : {}),
+    ...(asrResult
+      ? { quality: { chunks: quality, gapFilledWords, asrMissedSpeech } }
+      : {}),
+    zeroStorage: options.zeroStorage,
   };
   const degraded = quality.filter((q) => q.status !== "ok");
   if (degraded.length || asrMissedSpeech) {
@@ -931,58 +1093,55 @@ export async function transcribe(opts: PipelineOptions): Promise<TranscriptResul
   // straight from the media path without the user having asked for --formats json.
   writeJson(`${options.intermediatesDir}/result.json`, result);
 
+  const base = basename(options.input, ext(options.input));
+  const written: string[] = [];
+  const write = (name: string, content: string) => {
+    const path = `${options.outputDir}/${name}`;
+    writeFileSync(path, content);
+    written.push(resolve(path));
+  };
   for (const fmt of options.formats) {
-    const base = basename(options.input, ext(options.input));
-    if (fmt === "srt")
-      writeFileSync(
-        `${options.outputDir}/${base}.srt`,
-        formatSrt(result, { title: base }),
-      );
+    if (fmt === "srt") write(`${base}.srt`, formatSrt(result, { title: base }));
     if (fmt === "md")
-      writeFileSync(
-        `${options.outputDir}/${base}.md`,
+      write(
+        `${base}.md`,
         formatMarkdown(result, { title: base, mdStyle: options.mdStyle }),
       );
-    if (fmt === "txt")
-      writeFileSync(
-        `${options.outputDir}/${base}.txt`,
-        formatText(result, { title: base }),
-      );
-    if (fmt === "html")
-      writeFileSync(
-        `${options.outputDir}/${base}.html`,
-        formatHtml(result, { title: base }),
-      );
-    if (fmt === "json")
-      writeFileSync(`${options.outputDir}/${base}.json`, formatJson(result));
+    if (fmt === "txt") write(`${base}.txt`, formatText(result, { title: base }));
+    if (fmt === "html") write(`${base}.html`, formatHtml(result, { title: base }));
+    if (fmt === "json") write(`${base}.json`, formatJson(result));
   }
 
   // ---------- 9. SUMMARY (optional) ----------
   if (options.summary && finalSegments.length > 0) {
-    const reasoner = resolveReasoner(options.reasoner ?? DEFAULT_REASONER_MODEL, keys);
-    if (!reasoner) {
+    if (!reasonerA) {
       logger.warn("summary: no reasoner-capable key — skipping");
     } else {
-      logger.info(`=== summary (${reasoner.info.model}) ===`);
+      logger.info(`=== summary (${reasonerA.info.model}) ===`);
+      emit({
+        type: "stage",
+        stage: "summary",
+        state: "start",
+        detail: reasonerA.info.model,
+      });
       try {
         const summary = await summarizeTranscript(
-          reasoner.client,
-          reasoner.info.model,
+          reasonerA.client,
+          reasonerA.info.model,
           result,
           options.instructions,
         );
-        const base = basename(options.input, ext(options.input));
-        writeFileSync(`${options.outputDir}/${base}.summary.md`, summary);
+        write(`${base}.summary.md`, summary);
         logger.info(`summary written to ${base}.summary.md`);
       } catch (err) {
         // A failed summary must never sink a finished transcription.
         logger.warn(`summary failed: ${err instanceof Error ? err.message : err}`);
+        emit({ type: "stage", stage: "summary", state: "failed" });
       }
     }
   }
   // The run completed — the coarse partial is superseded by the real outputs.
   try {
-    const base = basename(options.input, ext(options.input));
     const partial = `${options.outputDir}/${base}.partial.md`;
     if (existsSync(partial)) (await import("node:fs/promises")).unlink(partial);
   } catch {
@@ -990,13 +1149,16 @@ export async function transcribe(opts: PipelineOptions): Promise<TranscriptResul
   }
   logger.info(`outputs written to ${options.outputDir}`);
 
-  // The receipt: what this run actually cost and how long it took.
-  const mins = Math.floor(wallMs / 60000);
-  const secs = Math.round((wallMs % 60000) / 1000);
+  // The receipt: what this run cost and how long it took, the summary included (its call
+  // came after the transcript's metadata was written).
+  const spent = computeReceipt(getLlmUsage(), tsProvider, duration, asrBilled);
+  const runMs = Date.now() - runStartedAt;
+  const mins = Math.floor(runMs / 60000);
+  const secs = Math.round((runMs % 60000) / 1000);
   logger.info(
-    `receipt: ${receipt.totals.calls} LLM calls · ${(receipt.totals.inputTokens / 1000).toFixed(0)}k in / ${(receipt.totals.outputTokens / 1000).toFixed(0)}k out · ~$${receipt.totalUsd.toFixed(2)}${receipt.incomplete ? " (+unpriced)" : ""} · ${mins ? `${mins}m` : ""}${secs}s`,
+    `receipt: ${spent.totals.calls} LLM calls · ${(spent.totals.inputTokens / 1000).toFixed(0)}k in / ${(spent.totals.outputTokens / 1000).toFixed(0)}k out · ~$${spent.totalUsd.toFixed(2)}${spent.incomplete ? " (+unpriced)" : ""} · ${mins ? `${mins}m` : ""}${secs}s`,
   );
-  for (const line of receipt.lines) logger.info(`  ${line}`);
+  for (const line of spent.lines) logger.info(`  ${line}`);
 
   // Lifetime stats (~/.offmute) — best-effort, opt out with OFFMUTE_NO_STATS=1.
   recordRun(
@@ -1004,18 +1166,28 @@ export async function transcribe(opts: PipelineOptions): Promise<TranscriptResul
       ts: new Date().toISOString(),
       input: basename(options.input),
       durationSec: duration,
-      wallMs,
+      wallMs: runMs,
       models: metadata.models,
       segments: finalSegments.length,
       characters: finalSegments.reduce((n, s) => n + s.text.length, 0),
       speakers: speakers.length,
-      llmCalls: receipt.totals.calls,
-      inputTokens: receipt.totals.inputTokens,
-      outputTokens: receipt.totals.outputTokens,
-      costUsd: receipt.totalUsd,
+      llmCalls: spent.totals.calls,
+      inputTokens: spent.totals.inputTokens,
+      outputTokens: spent.totals.outputTokens,
+      costUsd: spent.totalUsd,
     },
-    receipt.perModel,
+    spent.perModel,
   );
+  emit({
+    type: "done",
+    segments: finalSegments.length,
+    speakers: speakers.length,
+    durationSec: duration,
+    costUsd: spent.totalUsd,
+    wallMs: runMs,
+    retriedChunks: quality.filter((q) => q.status === "retried").length,
+    outputs: written,
+  });
   return result;
 }
 

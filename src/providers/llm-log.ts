@@ -20,7 +20,12 @@ export interface LlmLogEntry {
   response: string;
   /** `outputTokens` is what was billed as output, thinking included; `thoughtTokens` is the
    * thinking share of it, when the provider reports one. */
-  usage?: { inputTokens: number; outputTokens: number; thoughtTokens?: number; totalTokens?: number };
+  usage?: {
+    inputTokens: number;
+    outputTokens: number;
+    thoughtTokens?: number;
+    totalTokens?: number;
+  };
   durationMs: number;
   attempt?: number;
   error?: string;

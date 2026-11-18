@@ -60,10 +60,27 @@ export async function describeMeeting(
       logKind: "describe",
     },
   );
-  const text = res.text || "";
-  // Split into DESCRIPTION / ROSTER by the "---" separator.
+  return { ...parseDescription(res.text || ""), raw: res.text || "" };
+}
+
+/** Split a description reply into its two sections, without their headings: the prompt
+ * shows "DESCRIPTION" and "ROSTER", and models repeat them. */
+export function parseDescription(text: string): { description: string; roster: string } {
   const parts = text.split(/\n---\n|\n\s*---\s*\n/);
-  const description = parts[0]?.trim() || text.trim();
-  const roster = parts.slice(1).join("\n---\n").trim() || "(no explicit roster)";
-  return { description, roster, raw: text };
+  return {
+    description: dropHeading(parts[0] ?? "", "DESCRIPTION") || text.trim(),
+    roster:
+      dropHeading(parts.slice(1).join("\n---\n"), "ROSTER") || "(no explicit roster)",
+  };
+}
+
+/** `section` without a leading `word` heading: a line of its own ("## ROSTER") or a label
+ * before a colon ("**DESCRIPTION:** …"). Prose that merely starts with the word stays. */
+function dropHeading(section: string, word: string): string {
+  const s = section.trim();
+  const firstLine = s.split("\n", 1)[0] ?? "";
+  if (new RegExp(`^[#*_\\s]*${word}[#*_:\\s]*$`, "i").test(firstLine)) {
+    return s.slice(firstLine.length).trim();
+  }
+  return s.replace(new RegExp(`^[#*_\\s]*${word}[*_]*\\s*:[*_]*\\s*`, "i"), "");
 }

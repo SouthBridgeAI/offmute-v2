@@ -212,7 +212,13 @@ describe("alignSegments", () => {
   it("doesn't stretch a short line over a minute because one filler word matched early", () => {
     // Real case: "Um, and then I, I just draw..." spanned 18:14–19:20 because its "um"
     // matched an "um" a minute before the rest, hiding that minute from gap-fill.
-    const llm = [{ ...seg(1158, 1161, "Um, and then I just draw"), chunkStart: 1080, chunkEnd: 1680 }];
+    const llm = [
+      {
+        ...seg(1158, 1161, "Um, and then I just draw"),
+        chunkStart: 1080,
+        chunkEnd: 1680,
+      },
+    ];
     const asr = [
       word("um", 1094.6, 1094.9),
       word("and", 1157.5, 1157.7),
@@ -225,13 +231,19 @@ describe("alignSegments", () => {
     expect(out!.start).toBeCloseTo(1157.5, 1);
     expect(out!.end).toBeCloseTo(1159.2, 1);
     // every word stays inside the segment it belongs to
-    expect(Math.min(...out!.words.map((w) => w.start))).toBeGreaterThanOrEqual(out!.start);
+    expect(Math.min(...out!.words.map((w) => w.start))).toBeGreaterThanOrEqual(
+      out!.start,
+    );
   });
 
   it("gives a line the ASR didn't confirm a speaking-length span, not the whole gap", () => {
     // Real case: a 3-word goodbye with no confirmed word was spread over the 22 s between
     // its confirmed neighbours and hid that stretch from gap-fill.
-    const llm = [seg(0, 2, "we should wrap up now"), seg(2, 3, "good catching up"), seg(30, 31, "see you")];
+    const llm = [
+      seg(0, 2, "we should wrap up now"),
+      seg(2, 3, "good catching up"),
+      seg(30, 31, "see you"),
+    ];
     const asr = [
       word("we", 0, 0.3),
       word("should", 0.4, 0.7),
@@ -290,7 +302,9 @@ describe("toAsrClock before ownership", () => {
     chunkEnd: chunk === 0 ? 100 : 160,
   });
   const said = (text: string, start: number) =>
-    text.split(" ").map((w, k) => ({ text: w, start: start + k * 0.3, end: start + k * 0.3 + 0.25 }));
+    text
+      .split(" ")
+      .map((w, k) => ({ text: w, start: start + k * 0.3, end: start + k * 0.3 + 0.25 }));
   const asr = [
     ...said("alpha beta gamma delta epsilon", 80),
     ...said("small fun feature that I use all the time", 100.5),

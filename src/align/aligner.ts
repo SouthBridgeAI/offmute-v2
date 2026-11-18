@@ -73,7 +73,12 @@ const SPOKEN_SEC_PER_WORD = 0.5;
 const UNCONFIRMED_MAX_SEC = 5;
 
 function toAsrTokens(words: TimestampedWord[]): AsrTok[] {
-  return words.map((w) => ({ text: w.text, start: w.start, end: w.end, norm: normalizeWord(w.text) }));
+  return words.map((w) => ({
+    text: w.text,
+    start: w.start,
+    end: w.end,
+    norm: normalizeWord(w.text),
+  }));
 }
 
 /** Assign times to every LLM token from the aligned ops; interpolate inserts. */
@@ -248,7 +253,8 @@ export function alignSegments(
         }
         const best = runs.reduce((a, b) =>
           b.matched > a.matched ||
-          (b.matched === a.matched && Math.abs(b.start - s.startSec) < Math.abs(a.start - s.startSec))
+          (b.matched === a.matched &&
+            Math.abs(b.start - s.startSec) < Math.abs(a.start - s.startSec))
             ? b
             : a,
         );
@@ -335,7 +341,8 @@ export function toAsrClock(
 
   const moved = new Map<ParsedLlmSegment, ParsedLlmSegment>();
   for (const group of chunks.values()) {
-    const lo = Math.min(...group.map((s) => s.chunkStart ?? s.startSec)) - WINDOW_SLACK_SEC;
+    const lo =
+      Math.min(...group.map((s) => s.chunkStart ?? s.startSec)) - WINDOW_SLACK_SEC;
     const hi = Math.max(...group.map((s) => s.chunkEnd ?? s.endSec)) + WINDOW_SLACK_SEC;
     const aligned = alignSegments(
       group,
@@ -353,7 +360,11 @@ export function toAsrClock(
         shift = shifts[k - r] ?? shifts[k + r];
       }
       const s = group[aligned[k]!.sourceIndex]!;
-      moved.set(s, { ...s, startSec: s.startSec + (shift ?? 0), endSec: s.endSec + (shift ?? 0) });
+      moved.set(s, {
+        ...s,
+        startSec: s.startSec + (shift ?? 0),
+        endSec: s.endSec + (shift ?? 0),
+      });
     }
   }
   return segments.map((s) => moved.get(s) ?? s);

@@ -4,7 +4,7 @@
  * questions). offmute v1's most-loved feature, absent from v2 until now.
  */
 import type { TranscriptResult } from "../core/types.js";
-import type { OpenAICompatClient } from "../providers/openai-compat.js";
+import type { ChatClient } from "../providers/openai-compat.js";
 import { compactTime } from "./format.js";
 
 export function summaryPrompt(result: TranscriptResult, instructions?: string): string {
@@ -36,7 +36,7 @@ ${lines.join("\n")}`;
 }
 
 export async function summarizeTranscript(
-  client: OpenAICompatClient,
+  client: ChatClient,
   model: string,
   result: TranscriptResult,
   instructions?: string,

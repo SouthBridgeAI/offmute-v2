@@ -19,7 +19,7 @@ npx offmute-v2 meeting.mp4
 [![node](https://img.shields.io/badge/node-%E2%89%A520-339933?logo=node.js&logoColor=white)](#requirements)&nbsp;
 [![built by three frontier models](https://img.shields.io/badge/built%20by-GLM%20%C3%97%20Opus%20%C3%97%20Fable-8A2BE2)](#the-story)
 
-**[Quick start](#quick-start)** · **[What you get](#what-you-get)** · **[Why it's accurate](#why-its-accurate)** · **[Daemon](#daemon-mode)** · **[Costs](#costs-you-can-see)** · **[CLI](#cli-reference)** · **[Library](#library)** · **[The story](#the-story)**
+**[Quick start](#quick-start)** · **[What you get](#what-you-get)** · **[Why it's accurate](#why-its-accurate)** · **[Zero storage](#zero-storage)** · **[Daemon](#daemon-mode)** · **[Costs](#costs-you-can-see)** · **[CLI](#cli-reference)** · **[Library](#library)** · **[The story](#the-story)**
 
 </div>
 <!-- prettier-ignore-end -->
@@ -54,27 +54,39 @@ npx offmute-v2 meeting.mp4
 ```
 
 That's the whole thing. First run checks your setup and tells you what any missing keys would
-unlock. Every run shows you what it will cost before spending, and what it spent after:
+unlock. Every run shows you what it will cost before spending, works through the meeting in
+front of you (one cell per ten-minute chunk, with the word clock running alongside), and says
+what it spent after:
 
 ```text
-offmute-v2 0.1.0  team-call.mp4
+offmute-v2 0.2.0  design-review.m4a
+  cache /var/folders/…/offmute-v2-design-review-5d2e81c0
+✓ prepared the media  1s
+  16 min of audio · gemini-4-hydrogen · timed by AssemblyAI · ~$0.25 estimated
+  zero storage
 
-  estimate ~$0.30  [gemini-3.1-pro-preview: 4 chunks + describe ≈ $0.22 · assemblyai: 28min ≈ $0.07 · …]
-✓ preparing media · extracting keyframes 28s
-✓ listening for context 41s
-✓ transcribing 3/3 chunks 38s
-✓ timestamps (AssemblyAI) · 154 utterances, 5813 words, 2 speakers 23s
-✓ aligning timestamps · split 3 mixed-voice boundaries 0s
-✓ resolving speakers 0s
-  ◆ identified 3 speakers: {"Speaker A":"Hrishi","Speaker B":"Chibi","Speaker C":"Daniel"}
-✓ naming speakers (deepseek-chat + gemini-flash-latest second opinion) 12s
-✓ finalizing · 65 segments 0s
-  receipt 6 LLM calls · 63k in / 12k out · ~$0.32 · 2m49s
+✓ timed every word · AssemblyAI · 2,549 words · 2 voices · English  13s
+✓ listened for who's there  17s
+  A product design review: two engineers walk through the onboarding flow and agree what…
+✓ transcribed  ▰▰  2 chunks  46s
+✓ matched lines to the word times  0s
+✓ told the voices apart  0s
+  ◆ Speaker A → Priya · Speaker B → Jay
+✓ named the speakers · gemini-flash-latest  3s
+✓ finished  0s
 
-  → /Users/you/team-call.md
+  receipt 4 LLM calls · 53k in / 21k out · ~$0.27 · 1m12s
+     gemini-4-hydrogen: 3 calls · 47.1k in / 20.4k out · $0.22
+     gemini-flash-latest: 1 call · 5.6k in / 157 out · $0.01
+     assemblyai: 16min · $0.04
 
-65 segments · 3 speakers · 23m of audio · ~$0.32 · 2m 49s
+✓ 212 segments · 2 speakers · 15m 38s of audio · ~$0.27 · 1m 12s
+
+  → /Users/you/design-review.md
 ```
+
+Stop it whenever you like (Ctrl-C, a closed laptop): run the same command again and it carries
+on from what finished, AssemblyAI's job included.
 
 ## What you get
 
@@ -187,8 +199,29 @@ An honest tool tells you what it's about to spend:
 - **lifetime accounting** — `offmute-v2 stats` shows hours processed, characters produced, and
   cost by model, accumulated in `~/.offmute`
 
-Typical numbers: a 30-minute meeting on the default model runs ≈ **$0.40–0.80**, thinking tokens
-included; `--model gemini-3.8-flash` costs about a third as much until its price rises on 1 Jan 2027.
+Typical numbers: a 30-minute meeting on the default model, `gemini-4-hydrogen`, runs
+≈ **$0.40–0.80**, thinking tokens included. `--pro` uses `gemini-4-argon`, which kept a little
+more speech in our tests at about 1.7× the time, and costs about twice as much from 1 December 2026. `--model gemini-3.8-flash` costs about a third as much (until 1 January 2027) but dropped
+more speech on hard audio.
+
+## Zero storage
+
+Google's Gemini API now keeps the requests of new paid projects for 55 days by default (from
+26 October 2026), unless a request asks it not to. offmute asks, on every call, unless you turn
+it off:
+
+- **Gemini** — every request carries `store: false`, and each uploaded audio file is deleted as
+  soon as its call returns. Speaker naming on Gemini goes through Gemini's own API, where the
+  ask is honoured (its OpenAI-compatible endpoint rejects it).
+- **AssemblyAI** — the transcript is deleted from AssemblyAI the moment offmute has its own copy
+  (AssemblyAI deletes uploaded audio within 48 hours either way).
+- **Everyone else** — DeepSeek, OpenAI, Groq, ElevenLabs and the rest have no way to be asked
+  per request, so each run's plan line names the ones it will use:
+  `zero storage · deepseek-chat can't be asked to keep nothing`. For a run that stays on
+  providers that can be asked: `--reasoner gemini-flash-latest --identify single`, with the
+  default `--timestamped assemblyai`.
+
+`--no-zero-storage` turns the asks off and leaves each provider to its own retention.
 
 ## Fix a name in two seconds
 
@@ -209,23 +242,25 @@ name is left over and one voice unnamed, they bind by elimination.
 offmute-v2 <input> [options]      # transcribe (default command)
 ```
 
-| option                                  | default                  |                                                                 |
-| --------------------------------------- | ------------------------ | --------------------------------------------------------------- | --- | ------------------------------------------------------------ |
-| `-o, --output <dir>`                    | next to input            | where transcripts land                                          |
-| `--formats <list>`                      | `md`                     | any of `md,srt,txt,html,json`                                   |
-| `--summary`                             | off                      | also write TL;DR / decisions / action items                     |
-| `--instructions <text>`                 | –                        | guide the ear: _"the host is Alice; spell it Xiao, not Shao"_   |
-| `--speakers <names>`                    | –                        | who was in the room (helps naming; comma-separated)             |
-| `--model <name>`                        | `gemini-3.1-pro-preview` | `gemini-4-hydrogen` same cost · `gemini-3.8-flash` ~⅓ the cost  |
-| `--language <code>`                     | detected by the ASR      | the recording's language, e.g. `ko`, `ml`, `hi`                  |
-| `--timestamped <p>`                     | `assemblyai`             | `elevenlabs` (Scribe v2) · `whisper-groq` (free) · `none`       |
-| `--reasoner <name>`                     | `deepseek-chat`          | naming/summary model — DeepSeek, Gemini, GLM, Kimi, GPT, Claude |
-| `--level <1                             | 2                        | 3>`                                                             | `3` | 1 separation · 2 anonymous-consistent · 3 **verified names** |
-| `--identify <mode>`                     | `dual`                   | two reasoners + adjudication · `single`                         |
-| `--md-style <s>`                        | `merged`                 | merged paragraphs · `turns` for one block per turn              |
-| `--chunk-seconds` / `--overlap-seconds` | `600` / `60`             | chunking                                                        |
-| `--force`                               | –                        | ignore caches and recompute                                     |
-| `-i <dir>`                              | OS temp, per input       | cache location (printed each run)                               |
+| option                                  | default               |                                                                 |
+| --------------------------------------- | --------------------- | --------------------------------------------------------------- |
+| `-o, --output <dir>`                    | next to input         | where transcripts land                                          |
+| `--formats <list>`                      | `md`                  | any of `md,srt,txt,html,json`                                   |
+| `--summary`                             | off                   | also write TL;DR / decisions / action items                     |
+| `--instructions <text>`                 | –                     | guide the ear: _"the host is Alice; spell it Xiao, not Shao"_   |
+| `--speakers <names>`                    | –                     | who was in the room (helps naming; comma-separated)             |
+| `--model <name>`                        | `gemini-4-hydrogen`   | any Gemini model id · `gemini-3.8-flash` ~⅓ the cost            |
+| `--pro`                                 | off                   | `gemini-4-argon`: a little more speech, ~1.7× the time          |
+| `--no-zero-storage`                     | asks for zero storage | let providers keep requests under their own retention           |
+| `--language <code>`                     | detected by the ASR   | the recording's language, e.g. `ko`, `ml`, `hi`                 |
+| `--timestamped <p>`                     | `assemblyai`          | `elevenlabs` (Scribe v2) · `whisper-groq` (free) · `none`       |
+| `--reasoner <name>`                     | `deepseek-chat`       | naming/summary model — DeepSeek, Gemini, GLM, Kimi, GPT, Claude |
+| `--level <1\|2\|3>`                     | `3`                   | 1 separation · 2 anonymous-consistent · 3 **verified names**    |
+| `--identify <mode>`                     | `dual`                | two reasoners + adjudication · `single`                         |
+| `--md-style <s>`                        | `merged`              | merged paragraphs · `turns` for one block per turn              |
+| `--chunk-seconds` / `--overlap-seconds` | `600` / `60`          | chunking                                                        |
+| `--force`                               | –                     | ignore caches and recompute                                     |
+| `-i <dir>`                              | OS temp, per input    | cache location (printed each run)                               |
 
 ```bash
 offmute-v2 watch <dir>       # daemon: transcribe files as they appear
@@ -245,6 +280,10 @@ const { segments, speakers, metadata } = await transcribe({
   formats: ["md", "json"],
   instructions: "Three-person panel; label by name.",
   apiKeys: { gemini: "...", assemblyai: "..." }, // optional — falls back to env
+  // zeroStorage: false,                         // on by default, as in the CLI
+  onProgress: (e) => {
+    if (e.type === "chunk") console.log(`chunk ${e.index + 1}: ${e.state}`);
+  },
 });
 
 console.log(segments[0]);
@@ -253,9 +292,12 @@ console.log(segments[0]);
 console.log(metadata.cost); // { estimatedUsd, actualUsd, lines, ... }
 ```
 
-Every pipeline stage (`alignSegments`, `assignGlobalSpeakers`, `identifySpeakersV2`, the
-formatters) is exported individually — bring your own pipeline if you like. A browser build of
-the pure fusion core ships as `offmute-v2/browser` (fetch providers + optional ffmpeg.wasm).
+`onProgress` receives the same events the terminal display is drawn from: the plan (model,
+estimate, which providers zero storage couldn't ask), each stage, each chunk, the ASR, the
+coverage check redoing a chunk, the names, and the files written. Every pipeline stage
+(`alignSegments`, `assignGlobalSpeakers`, `identifySpeakersV2`, the formatters) is exported
+individually — bring your own pipeline if you like. A browser build of the pure fusion core
+ships as `offmute-v2/browser` (fetch providers + optional ffmpeg.wasm).
 
 ## What can go wrong (honestly)
 
@@ -277,7 +319,8 @@ the pure fusion core ships as `offmute-v2/browser` (fetch providers + optional f
 - `GEMINI_API_KEY` (or `GOOGLE_API_KEY`) — required, the ears
 - One clock, strongly recommended: `ASSEMBLYAI_API_KEY` (default) · `ELEVENLABS_API_KEY`
   (Scribe v2 — the sharpest diarization we've tested) · `GROQ_API_KEY` (free whisper timing)
-- Nice-to-have: `DEEPSEEK_API_KEY` — makes speaker naming cost ~$0.003 a run
+- Nice-to-have: `DEEPSEEK_API_KEY` — makes speaker naming cost ~$0.003 a run (DeepSeek can't be
+  asked for zero storage)
 
 Keys can also be injected via the library API instead of the environment. Run
 `offmute-v2 doctor` to see where you stand.

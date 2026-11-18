@@ -115,6 +115,8 @@ export interface TranscriptMetadata {
    * done where it didn't. "Every run reported success" was true of runs that silently
    * lost minutes; this says where text came from the ASR instead. */
   quality?: TranscriptQuality;
+  /** Whether this run asked providers to keep nothing (PipelineOptions.zeroStorage). */
+  zeroStorage?: boolean;
 }
 
 /** One LLM chunk's coverage against the ASR. */

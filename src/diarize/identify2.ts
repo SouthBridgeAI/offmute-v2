@@ -20,11 +20,11 @@ import {
   type IdentifySegment,
 } from "./identify.js";
 import type { SpeakerInfo } from "../core/types.js";
-import type { OpenAICompatClient } from "../providers/openai-compat.js";
+import type { ChatClient } from "../providers/openai-compat.js";
 import { logger } from "../utils/logger.js";
 
 export interface ReasonerHandle {
-  client: OpenAICompatClient;
+  client: ChatClient;
   model: string;
   provider: string;
 }
@@ -52,6 +52,9 @@ export interface IdentifyV2Result {
   tripwires: { speakerId: string; introducedName: string; segmentText: string }[];
   passA: IdentifyResult & { model: string };
   passB?: IdentifyResult & { model: string };
+  /** Every pass failed to run (an outage, an unparseable reply), so no naming happened;
+   * not the same as passes that ran and found no names. */
+  allPassesFailed: boolean;
 }
 
 /** Normalize for matching: lowercase; apostrophes join ("I'm"→"im"); other
@@ -322,7 +325,8 @@ export async function identifySpeakersV2(
     !!r &&
     r.speakers.length === 0 &&
     /fetch failed|HTTP \d|network|ENOTFOUND|JSON parse|no response/i.test(r.reasoning);
-  if (passFailed(resA) && (!wantB || passFailed(resB))) {
+  const allPassesFailed = passFailed(resA) && (!wantB || passFailed(resB));
+  if (allPassesFailed) {
     logger.warn(
       `identify: ALL passes failed (${resA.reasoning.slice(0, 80)}) — speakers left as generic labels. ` +
         `Re-run to retry naming cheaply (everything else is cached).`,
@@ -447,5 +451,6 @@ export async function identifySpeakersV2(
     tripwires,
     passA: { ...resA, model: reasonerA.model },
     passB: resB ? { ...resB, model: reasonerB!.model } : undefined,
+    allPassesFailed,
   };
 }

@@ -1,12 +1,14 @@
 /**
- * Reasoner resolution: map a model name to an OpenAI-compatible endpoint + key.
+ * Reasoner resolution: map a model name to a chat client + key.
  *
  * Every text-reasoning pass (identify, summary, adjudication) goes through this one
- * seam. All supported providers expose an OpenAI-compatible /chat/completions —
- * including Gemini (generativelanguage .../v1beta/openai) and Anthropic — so the
- * whole pool shares the fetch client, retries, and llm-call logging.
+ * seam. Gemini models use the native generateContent API (GeminiChatClient), where a
+ * request can ask Google to store nothing; every other provider exposes an
+ * OpenAI-compatible /chat/completions and shares that fetch client, retries and logging.
  */
-import { OpenAICompatClient } from "./openai-compat.js";
+import { OpenAICompatClient, type ChatClient } from "./openai-compat.js";
+import { GeminiClient } from "./gemini.js";
+import { GeminiChatClient } from "./gemini-chat.js";
 import type { ApiKeys } from "../core/config.js";
 
 export interface ReasonerInfo {
@@ -74,8 +76,22 @@ export function reasonerKey(info: ReasonerInfo, keys: ApiKeys): string | undefin
 }
 
 export interface ResolvedReasoner {
-  client: OpenAICompatClient;
+  client: ChatClient;
   info: ReasonerInfo;
+}
+
+export interface ReasonerOptions {
+  /** Gemini reasoners ask Google to store nothing (default true). */
+  zeroStorage?: boolean;
+}
+
+function clientFor(info: ReasonerInfo, key: string, opts: ReasonerOptions): ChatClient {
+  return info.provider === "gemini"
+    ? new GeminiChatClient(
+        new GeminiClient(key, { zeroStorage: opts.zeroStorage }),
+        info.model,
+      )
+    : new OpenAICompatClient(info.baseUrl, key, info.model, info.provider);
 }
 
 /**
@@ -87,6 +103,7 @@ export interface ResolvedReasoner {
 export function resolveReasoner(
   spec: string | undefined,
   keys: ApiKeys,
+  opts: ReasonerOptions = {},
 ): ResolvedReasoner | null {
   const candidates = [spec, "deepseek-chat", "gemini-flash-latest"].filter(
     (s): s is string => !!s,
@@ -94,12 +111,7 @@ export function resolveReasoner(
   for (const c of candidates) {
     const info = resolveReasonerInfo(c);
     const key = reasonerKey(info, keys);
-    if (key) {
-      return {
-        client: new OpenAICompatClient(info.baseUrl, key, info.model, info.provider),
-        info,
-      };
-    }
+    if (key) return { client: clientFor(info, key, opts), info };
   }
   return null;
 }
@@ -111,18 +123,14 @@ export function resolveReasoner(
 export function resolveSecondReasoner(
   first: ReasonerInfo,
   keys: ApiKeys,
+  opts: ReasonerOptions = {},
 ): ResolvedReasoner | null {
   const candidates = ["gemini-flash-latest", "deepseek-chat", "glm-4.7", "gpt-4o-mini"];
   for (const c of candidates) {
     const info = resolveReasonerInfo(c);
     if (info.provider === first.provider) continue;
     const key = reasonerKey(info, keys);
-    if (key) {
-      return {
-        client: new OpenAICompatClient(info.baseUrl, key, info.model, info.provider),
-        info,
-      };
-    }
+    if (key) return { client: clientFor(info, key, opts), info };
   }
   return null;
 }

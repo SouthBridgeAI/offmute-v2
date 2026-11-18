@@ -29,6 +29,7 @@ import { identifySpeakers } from "./diarize/identify.js";
 import { finalizeSegments } from "./finalize/finalize.js";
 import { formatSrt, formatMarkdown, formatJson } from "./finalize/format.js";
 import type { Segment, TranscriptResult, SpeakerInfo } from "./core/types.js";
+import { DEFAULT_TRANSCRIBE_MODEL } from "./core/models.js";
 
 // Re-export the pure-logic surface for custom browser orchestration.
 export {
@@ -58,7 +59,10 @@ export interface TranscribeBrowserOptions {
   assemblyaiApiKey: string;
   /** Audio file extension for MIME detection (default "flac"). */
   audioExt?: string;
+  /** Transcription model (default gemini-4-hydrogen, as the CLI). */
   model?: string;
+  /** Ask providers to keep nothing (default true), as PipelineOptions.zeroStorage. */
+  zeroStorage?: boolean;
   instructions?: string;
   level?: 1 | 2 | 3;
   deepseekApiKey?: string;
@@ -74,17 +78,18 @@ export interface TranscribeBrowserOptions {
 export async function transcribeBrowser(
   opts: TranscribeBrowserOptions,
 ): Promise<TranscriptResult> {
-  const model = opts.model ?? "gemini-2.5-flash";
+  const model = opts.model ?? DEFAULT_TRANSCRIBE_MODEL;
+  const zeroStorage = opts.zeroStorage ?? true;
   const level = opts.level ?? 2;
 
   // 1. ASR (whole file).
-  const asr = await new AssemblyAIFetchClient(opts.assemblyaiApiKey).transcribe(
-    opts.audio,
-  );
+  const asr = await new AssemblyAIFetchClient(opts.assemblyaiApiKey, {
+    zeroStorage,
+  }).transcribe(opts.audio);
 
   // 2. LLM transcription (whole audio inline, single call).
   const audioBuf = await opts.audio.arrayBuffer();
-  const gemini = new GeminiFetchClient({ apiKey: opts.geminiApiKey });
+  const gemini = new GeminiFetchClient({ apiKey: opts.geminiApiKey, zeroStorage });
   const gen = await gemini.generateJson<LlmTranscriptJson>(
     model,
     transcriptionPrompt({ index: 1, total: 1, instructions: opts.instructions }),

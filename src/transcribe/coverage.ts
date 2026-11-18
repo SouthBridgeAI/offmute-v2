@@ -45,5 +45,11 @@ export function chunkCoverage(
   );
   const ratio = asrCount ? llmWords / asrCount : Infinity;
   const judged = asrCount >= MIN_ASR_WORDS;
-  return { llmWords, asrWords: asrCount, ratio, judged, low: judged && ratio < MIN_COVERAGE_RATIO };
+  return {
+    llmWords,
+    asrWords: asrCount,
+    ratio,
+    judged,
+    low: judged && ratio < MIN_COVERAGE_RATIO,
+  };
 }

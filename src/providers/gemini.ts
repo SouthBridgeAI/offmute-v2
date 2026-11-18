@@ -2,8 +2,9 @@
  * Gemini provider (multimodal). Handles file upload + processing poll, text and
  * structured-JSON generation, retries, token tracking, and uploaded-file cleanup.
  *
- * Uses `@google/genai` v1 SDK. Audio is uploaded via the Files API (supports large
- * files) and referenced by URI in the generate request.
+ * Uses the `@google/genai` v2 SDK (2.31 or later sends `store` on generateContent). Audio
+ * is uploaded via the Files API (supports large files) and referenced by URI in the
+ * generate request; every uploaded file is deleted when its call finishes.
  */
 import {
   GoogleGenAI,
@@ -16,6 +17,11 @@ import { logger } from "../utils/logger.js";
 import { logLlmCall } from "./llm-log.js";
 import { withRetry } from "../utils/retry.js";
 import { usageFromMetadata, type GeminiUsage } from "./gemini-usage.js";
+import {
+  fallbackThinking,
+  isThinkingConfigError,
+  resolveThinking,
+} from "./gemini-models.js";
 
 export type { GeminiUsage };
 
@@ -31,6 +37,8 @@ export interface GeminiGenerateOptions {
   maxOutputTokens?: number;
   /** Force JSON output with this schema. */
   responseSchema?: Record<string, unknown>;
+  /** Force JSON output without a schema (ignored when responseSchema is set). */
+  responseJson?: boolean;
   /** System instruction. */
   systemInstruction?: string;
   /** What this call is for (logged): describe | transcribe | identify | … */
@@ -85,55 +93,26 @@ function detectMime(path: string): string {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-/**
- * Per-model "thinking" configuration. The control is NOT uniform across the Gemini family,
- * and the wrong/default level makes some models (esp. 3.x **pro**) over-think long audio —
- * e.g. ~7x slower for transcription, which doesn't benefit from heavy reasoning. We tame it:
- *  - gemini-4-*    → `thinkingLevel: LOW`, the lowest Gemini 4 accepts (it rejects MINIMAL and
- *                    cannot turn thinking off; its defaults are MEDIUM, or HIGH on Hydrogen)
- *  - gemini-2.5-*  → `thinkingBudget` (flash can disable with 0; pro can't fully disable → 128)
- *  - gemini-3.x / *-latest → `thinkingLevel` (pro can't take MINIMAL → floor to LOW; flash MINIMAL)
- *  - gemini-2.0-*  → no thinking control
- * Returns the `thinkingConfig` fragment, or undefined when the model takes none.
- */
-export function resolveThinking(model: string): Record<string, unknown> | undefined {
-  const m = model.toLowerCase();
-  if (m.includes("gemini-2.0")) return undefined;
-  if (m.includes("gemini-4")) return { thinkingLevel: "LOW" };
-  if (m.includes("gemini-2.5")) {
-    return { thinkingBudget: m.includes("pro") ? 128 : 0 };
-  }
-  // 3.x (incl. gemini-3-*, gemini-3.1-*) and moving aliases like gemini-flash-latest /
-  // gemini-pro-latest use thinkingLevel. Pro rejects MINIMAL, so floor it to LOW.
-  if (m.includes("gemini-3") || m.includes("flash-latest") || m.includes("pro-latest")) {
-    return { thinkingLevel: m.includes("pro") ? "LOW" : "MINIMAL" };
-  }
-  return undefined;
-}
-
-/** The thinking config to retry with after a model rejected `rejected`: MINIMAL steps up
- * to LOW (a moving alias may now point at a model whose floor is LOW); anything else is
- * dropped, leaving the model's default. */
-export function fallbackThinking(
-  rejected: Record<string, unknown>,
-): Record<string, unknown> | undefined {
-  return rejected.thinkingLevel === "MINIMAL" ? { thinkingLevel: "LOW" } : undefined;
-}
-
-/** Whether an error message looks like the model rejected our thinking config. */
-export function isThinkingConfigError(message: string | undefined): boolean {
-  if (!message) return false;
-  return (
-    /thinking/i.test(message) &&
-    /(not supported|invalid|unsupported|unknown name|unexpected)/i.test(message)
-  );
+export interface GeminiClientOptions {
+  /** Ask Google to store nothing (default true): every request carries a top-level
+   * `store: false`. Paid projects created on or after 26 Oct 2026 keep generateContent
+   * requests for 55 days unless told not to. False sends no `store` field, leaving the
+   * project's own setting. */
+  zeroStorage?: boolean;
+  /** API endpoint override (a proxy, or a local server in tests). */
+  baseUrl?: string;
 }
 
 export class GeminiClient {
   private ai: GoogleGenAI;
+  private zeroStorage: boolean;
 
-  constructor(apiKey: string) {
-    this.ai = new GoogleGenAI({ apiKey });
+  constructor(apiKey: string, opts: GeminiClientOptions = {}) {
+    this.ai = new GoogleGenAI({
+      apiKey,
+      ...(opts.baseUrl ? { httpOptions: { baseUrl: opts.baseUrl } } : {}),
+    });
+    this.zeroStorage = opts.zeroStorage ?? true;
   }
 
   /** Upload a file and wait until it's done processing. Uploads ride one long HTTP
@@ -186,9 +165,14 @@ export class GeminiClient {
         maxOutputTokens,
         temperature,
       };
+      // The SDK sends this at the request's top level, where the API reads it; inside
+      // generationConfig the API rejects it (400).
+      if (this.zeroStorage) config.store = false;
       if (responseSchema) {
         config.responseMimeType = "application/json";
         config.responseSchema = responseSchema;
+      } else if (opts.responseJson) {
+        config.responseMimeType = "application/json";
       }
       if (systemInstruction) config.systemInstruction = systemInstruction;
       // Tame per-model thinking (keeps pro fast for transcription). Dropped automatically

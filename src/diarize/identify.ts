@@ -4,7 +4,7 @@
  * "my name is Rishi, I run Southbridge" identifies the presenter. A speaker may
  * self-identify in only one chunk, so the reasoner must see the whole transcript.
  */
-import { OpenAICompatClient } from "../providers/openai-compat.js";
+import type { ChatClient } from "../providers/openai-compat.js";
 import type { SpeakerInfo } from "../core/types.js";
 
 /** Minimal segment shape needed for identification. */
@@ -106,7 +106,7 @@ Use the EXACT speaker id strings (e.g. "Speaker A"). The evidence field must be 
 
 /** Identify speakers via a text reasoner. Returns a name map (speaker id → name). */
 export async function identifySpeakers(
-  client: OpenAICompatClient,
+  client: ChatClient,
   model: string,
   segments: IdentifySegment[],
   speakers: SpeakerInfo[],

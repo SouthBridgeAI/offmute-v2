@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { estimateRunCost, computeReceipt, asrCost, priceFor } from "../src/core/pricing.js";
+import {
+  estimateRunCost,
+  computeReceipt,
+  asrCost,
+  priceFor,
+} from "../src/core/pricing.js";
 import { usageFromMetadata } from "../src/providers/gemini-usage.js";
 
 describe("estimateRunCost", () => {

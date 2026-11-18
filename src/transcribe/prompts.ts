@@ -62,7 +62,7 @@ export interface ChunkContext {
   // No previous-chunk tail: chunks overlap by design, so "continue from here, don't repeat
   // this" contradicts the audio the model hears. It only ever arrived from a stale cache
   // (re-runs, or a concurrently finished chunk), and with it 3.1 Pro looped on 2 of 4
-  // attempts at a chunk where it looped on 0 of 4 without it (lab/bakeoff, Nov 2026).
+  // attempts at a chunk where it looped on 0 of 4 without it (docs/field-report-2, §8).
   /** Chunk index (1-based) and total. */
   index: number;
   total: number;

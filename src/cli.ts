@@ -6,11 +6,13 @@
  *   models — the model matrix and what your keys unlock
  *   doctor — environment + key + API health check
  */
-import { Command } from "commander";
+import { Command, Option } from "commander";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { dirname, join, basename, resolve } from "node:path";
+import { dirname, join, basename } from "node:path";
 import { transcribe } from "./core/pipeline.js";
+import { PRO_TRANSCRIBE_MODEL } from "./core/models.js";
+import type { DoneEvent, PlanEvent } from "./core/progress.js";
 import type { Pass } from "./core/config.js";
 import { runModels } from "./commands/models.js";
 import { runDoctor } from "./commands/doctor.js";
@@ -23,6 +25,7 @@ import {
   configureUi,
   uiActive,
   finishUi,
+  onProgress,
   banner,
   outputsBlock,
   tipsBlock,
@@ -66,10 +69,12 @@ interface TranscribeCliOpts {
   level: string;
   identify?: "dual" | "single";
   model?: string;
+  pro: boolean;
   reasoner?: string;
   timestamped?: "assemblyai" | "elevenlabs" | "whisper-groq" | "none";
   language?: string;
   force: boolean;
+  zeroStorage: boolean;
   onlyChunk?: string;
   saveIntermediates: boolean;
   progress: boolean;
@@ -83,6 +88,7 @@ function buildTips(
   result: TranscriptResult,
   opts: TranscribeCliOpts,
   input: string,
+  plan: PlanEvent | undefined,
 ): string[] {
   const tips: string[] = [];
   const genericSpeakers = result.speakers.filter(
@@ -93,9 +99,15 @@ function buildTips(
       `${genericSpeakers.length} speaker(s) stayed generic — retcon instantly: offmute-v2 rename "${input}" "${genericSpeakers[0]!.id}=Name", or pass --speakers "Alice,Bob" next time`,
     );
   }
-  if (!opts.model && result.metadata.duration > 1500) {
+  const unasked = plan?.notAsked ?? [];
+  if (unasked.length > 0) {
+    const fixes = [
+      unasked.some((p) => p.role === "timing") && "--timestamped assemblyai",
+      unasked.some((p) => p.role === "text") &&
+        "--reasoner gemini-flash-latest --identify single",
+    ].filter(Boolean);
     tips.push(
-      "long file on the pro model — --model gemini-3.8-flash costs about a third as much (until 1 Jan 2027)",
+      `zero storage can't ask ${unasked.map((p) => p.name).join(" or ")} to keep nothing; ${fixes.join(" ")} keeps the whole run on providers it can ask`,
     );
   }
   if (!opts.formats && !opts.summary) {
@@ -138,6 +150,8 @@ async function runTranscribe(input: string, opts: TranscribeCliOpts): Promise<vo
   if (pretty) maybeFirstRunCheck(packageVersion);
 
   const t0 = Date.now();
+  let plan: PlanEvent | undefined;
+  let done: DoneEvent | undefined;
   const result = await transcribe({
     input,
     outputDir: opts.output, // undefined → defaults to the input file's directory
@@ -161,35 +175,32 @@ async function runTranscribe(input: string, opts: TranscribeCliOpts): Promise<vo
       : undefined,
     diarizationLevel: level,
     identifyMode: opts.identify,
-    model: opts.model,
+    model: opts.pro ? PRO_TRANSCRIBE_MODEL : opts.model,
     reasoner: opts.reasoner,
     timestampedProvider: opts.timestamped,
     language: opts.language,
+    zeroStorage: opts.zeroStorage,
     force: opts.force,
     onlyChunk: opts.onlyChunk ? parseInt(opts.onlyChunk, 10) : undefined,
     saveIntermediates: opts.saveIntermediates,
     showProgress: opts.progress,
     llmLog: opts.llmLog,
     logLevel: opts.logLevel as "debug" | "info" | "warn" | "error",
+    onProgress: (e) => {
+      if (e.type === "plan") plan = e;
+      if (e.type === "done") done = e;
+      onProgress(e);
+    },
   });
+  const cost = done?.costUsd !== undefined ? ` · ~$${done.costUsd.toFixed(2)}` : "";
   if (uiActive()) {
     finishUi();
-    const base = basename(input).replace(/\.[^.]+$/, "");
-    const outDir = resolve(opts.output ?? (dirname(resolve(input)) || "."));
-    const formats = opts.formats ? opts.formats.split(",") : ["md"];
-    const files = formats.map((f) => join(outDir, `${base}.${f.trim()}`));
-    if (opts.summary) files.push(join(outDir, `${base}.summary.md`));
-    const cost = result.metadata.cost
-      ? ` · ~$${result.metadata.cost.actualUsd.toFixed(2)}`
-      : "";
-    const wall = result.metadata.wallMs
-      ? ` · ${formatDuration(Math.round(result.metadata.wallMs / 1000))}`
-      : "";
+    const wall = done ? ` · ${formatDuration(Math.round(done.wallMs / 1000))}` : "";
     outputsBlock(
-      files,
+      done?.outputs ?? [],
       `${result.segments.length} segments · ${result.speakers.length} speakers · ${formatDuration(Math.round(result.metadata.duration))} of audio${cost}${wall}`,
     );
-    tipsBlock(buildTips(result, opts, input));
+    tipsBlock(buildTips(result, opts, input, plan));
     starFooter();
     process.stdout.write("\n");
   } else {
@@ -197,9 +208,6 @@ async function runTranscribe(input: string, opts: TranscribeCliOpts): Promise<vo
   }
   // A run long enough to walk away from earns a ping when it's back.
   if (opts.notify && Date.now() - t0 > 120_000) {
-    const cost = result.metadata.cost
-      ? ` · ~$${result.metadata.cost.actualUsd.toFixed(2)}`
-      : "";
     notify(
       "offmute-v2",
       `${basename(input)} transcribed — ${result.segments.length} segments${cost}`,
@@ -245,7 +253,13 @@ function addTranscribeOptions(cmd: Command): Command {
       "speaker naming: dual (two reasoners, default) | single",
       "dual",
     )
-    .option("--model <name>", "override transcription model")
+    .option("--model <name>", "override transcription model (default gemini-4-hydrogen)")
+    .addOption(
+      new Option(
+        "--pro",
+        `transcribe with the pro model, ${PRO_TRANSCRIBE_MODEL}: keeps a little more speech, about 1.7× slower`,
+      ).conflicts("model"),
+    )
     .option("--reasoner <name>", "override text-reasoner model (default deepseek-chat)")
     .option(
       "--timestamped <provider>",
@@ -256,6 +270,10 @@ function addTranscribeOptions(cmd: Command): Command {
       "spoken language for the timing ASR, e.g. ko, ml, hi (default: the ASR detects one)",
     )
     .option("--force", "force reprocess cached chunk outputs", false)
+    .option(
+      "--no-zero-storage",
+      "let providers keep requests under their own retention (by default offmute asks Gemini and AssemblyAI to keep nothing)",
+    )
     .option("--only-chunk <n>", "process only a specific chunk index (debug)")
     .option("--save-intermediates", "save intermediates (default true)", true)
     .option("--no-progress", "hide progress output")
@@ -325,10 +343,20 @@ program
   )
   .option("--level <1|2|3>", "diarization level", "3")
   .option("--identify <mode>", "speaker naming: dual | single", "dual")
-  .option("--model <name>", "override transcription model")
+  .option("--model <name>", "override transcription model (default gemini-4-hydrogen)")
+  .addOption(
+    new Option(
+      "--pro",
+      `transcribe with the pro model, ${PRO_TRANSCRIBE_MODEL}`,
+    ).conflicts("model"),
+  )
   .option("--reasoner <name>", "override text-reasoner model")
   .option("--timestamped <provider>", "assemblyai|elevenlabs|whisper-groq|none")
   .option("--language <code>", "spoken language for the timing ASR, e.g. ko, ml, hi")
+  .option(
+    "--no-zero-storage",
+    "let providers keep requests under their own retention (by default offmute asks them to keep nothing)",
+  )
   .action(
     async (
       dir: string,
@@ -345,9 +373,11 @@ program
         level: string;
         identify?: "dual" | "single";
         model?: string;
+        pro: boolean;
         reasoner?: string;
         timestamped?: "assemblyai" | "elevenlabs" | "whisper-groq" | "none";
         language?: string;
+        zeroStorage: boolean;
       },
     ) => {
       let level = parseInt(opts.level, 10) as 1 | 2 | 3;
@@ -372,10 +402,11 @@ program
             : undefined,
           diarizationLevel: level,
           identifyMode: opts.identify,
-          model: opts.model,
+          model: opts.pro ? PRO_TRANSCRIBE_MODEL : opts.model,
           reasoner: opts.reasoner,
           timestampedProvider: opts.timestamped,
           language: opts.language,
+          zeroStorage: opts.zeroStorage,
         },
       });
     },

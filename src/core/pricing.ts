@@ -27,18 +27,46 @@ interface DatedPrice {
 // Gemini: ai.google.dev/gemini-api/docs/pricing, standard tier, read 2026-11-17.
 const MODEL_PRICES: Record<string, ModelPrice | DatedPrice> = {
   "gemini-4-hydrogen": { textIn: 1.5, out: 7.5 },
-  "gemini-4-argon": { until: "2026-11-30", price: { textIn: 2.0, out: 10.0 }, then: { textIn: 4.0, out: 20.0 } },
-  "gemini-4-carbon": { until: "2026-11-30", price: { textIn: 2.0, out: 10.0 }, then: { textIn: 4.0, out: 20.0 } },
+  "gemini-4-argon": {
+    until: "2026-11-30",
+    price: { textIn: 2.0, out: 10.0 },
+    then: { textIn: 4.0, out: 20.0 },
+  },
+  "gemini-4-carbon": {
+    until: "2026-11-30",
+    price: { textIn: 2.0, out: 10.0 },
+    then: { textIn: 4.0, out: 20.0 },
+  },
   "gemini-3.1-pro-preview": { textIn: 2.0, out: 12.0 }, // ≤200k-token prompts
-  "gemini-3.8-flash": { until: "2026-12-31", price: { textIn: 0.75, out: 3.75 }, then: { textIn: 1.5, out: 7.5 } },
-  "gemini-3.6-flash": { until: "2026-12-31", price: { textIn: 0.75, out: 3.75 }, then: { textIn: 1.5, out: 7.5 } },
+  "gemini-3.8-flash": {
+    until: "2026-12-31",
+    price: { textIn: 0.75, out: 3.75 },
+    then: { textIn: 1.5, out: 7.5 },
+  },
+  "gemini-3.6-flash": {
+    until: "2026-12-31",
+    price: { textIn: 0.75, out: 3.75 },
+    then: { textIn: 1.5, out: 7.5 },
+  },
   // Deprecated 2026-10-08; requests are served by gemini-3.6-flash (priced as such).
-  "gemini-3.5-flash": { until: "2026-12-31", price: { textIn: 0.75, out: 3.75 }, then: { textIn: 1.5, out: 7.5 } },
+  "gemini-3.5-flash": {
+    until: "2026-12-31",
+    price: { textIn: 0.75, out: 3.75 },
+    then: { textIn: 1.5, out: 7.5 },
+  },
   "gemini-3.5-flash-lite": { textIn: 0.3, out: 2.5 },
   "gemini-3-flash-preview": { textIn: 0.5, audioIn: 1.0, out: 3.0 },
   // From 2026-12-01 Google serves (and bills) 2.5 Pro as 3.8 Flash and 2.5 Flash as 3.5 Flash-Lite.
-  "gemini-2.5-pro": { until: "2026-11-30", price: { textIn: 1.25, out: 10.0 }, then: { textIn: 1.5, out: 7.5 } },
-  "gemini-2.5-flash": { until: "2026-11-30", price: { textIn: 0.3, audioIn: 1.0, out: 2.5 }, then: { textIn: 0.3, out: 2.5 } },
+  "gemini-2.5-pro": {
+    until: "2026-11-30",
+    price: { textIn: 1.25, out: 10.0 },
+    then: { textIn: 1.5, out: 7.5 },
+  },
+  "gemini-2.5-flash": {
+    until: "2026-11-30",
+    price: { textIn: 0.3, audioIn: 1.0, out: 2.5 },
+    then: { textIn: 0.3, out: 2.5 },
+  },
   "gemini-2.5-flash-lite": { textIn: 0.1, audioIn: 0.3, out: 0.4 },
   // Moving aliases. Google hasn't documented their targets since January 2026; these are
   // the last documented targets' prices, so treat them as estimates.
@@ -138,7 +166,9 @@ export function estimateRunCost(opts: {
     const audioTok = billedAudioSec * audioTokensPerSec(opts.model);
     const promptTok = chunks * 1500;
     const outTok =
-      (opts.durationSec / 60) * OUTPUT_TOK_PER_AUDIO_MIN * (1 + thinkingOverhead(opts.model)) +
+      (opts.durationSec / 60) *
+        OUTPUT_TOK_PER_AUDIO_MIN *
+        (1 + thinkingOverhead(opts.model)) +
       1500;
     const inRate = p.audioIn ?? p.textIn;
     const llmUsd =

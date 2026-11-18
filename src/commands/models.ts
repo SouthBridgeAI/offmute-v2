@@ -2,29 +2,35 @@
  * `offmute-v2 models` — the model matrix: what each role can use, which presets the
  * current keys can actually call, and what the defaults resolve to.
  */
+import { resolveKeys, type ApiKeys } from "../core/config.js";
 import {
-  resolveKeys,
   DEFAULT_TRANSCRIBE_MODEL,
   DEFAULT_REASONER_MODEL,
-  type ApiKeys,
-} from "../core/config.js";
+  PRO_TRANSCRIBE_MODEL,
+} from "../core/models.js";
 import {
   REASONER_PRESETS,
   resolveReasonerInfo,
   reasonerKey,
 } from "../providers/reasoner.js";
 
-// Notes say only what was measured on the owner's meetings (lab/bakeoff, 17 Nov 2026) or
+// Notes say only what was measured on the owner's meetings (docs/field-report-2, §8) or
 // published by Google. Removed: gemini-3-pro-preview (shut down 9 Mar 2026), gemini-3.5-flash
 // (served by 3.6 Flash since 8 Oct 2026), gemini-2.5-* (served by 3.x models from 1 Dec 2026).
 const TRANSCRIBE_PRESETS: { model: string; note: string }[] = [
-  { model: "gemini-3.1-pro-preview", note: "default" },
   {
-    model: "gemini-4-hydrogen",
-    note: "same cost per hour as the default; kept the speech the default dropped on hard chunks",
+    model: DEFAULT_TRANSCRIBE_MODEL,
+    note: "kept 96.6% of the speech on hard chunks, $0.74/hour",
+  },
+  {
+    model: PRO_TRANSCRIBE_MODEL,
+    note: "--pro · kept the most (97.3%), slower, ~2× from 1 Dec",
   },
   { model: "gemini-3.8-flash", note: "about a third of the cost until 1 Jan 2027" },
-  { model: "gemini-4-argon", note: "slower; price doubles on 1 Dec 2026" },
+  {
+    model: "gemini-3.1-pro-preview",
+    note: "the 0.1.x default; dropped whole chunks on hard audio",
+  },
   { model: "gemini-flash-latest", note: "moving alias, stays current" },
 ];
 
@@ -79,6 +85,14 @@ export async function runModels(): Promise<void> {
   lines.push("Any Gemini model id works for --model; any provider-prefixed model");
   lines.push('(e.g. "zai:glm-4.7") works for --reasoner. Keys come from the environment');
   lines.push("or can be injected via the library API.");
+  lines.push("");
+  lines.push(
+    "Zero storage (on by default) asks Gemini and AssemblyAI to keep nothing. The other",
+  );
+  lines.push(
+    "providers have no way to be asked; each run's plan line names the ones it uses.",
+  );
+  lines.push("--no-zero-storage leaves every provider to its own retention.");
   lines.push("");
   console.log(lines.join("\n"));
 }

@@ -4,9 +4,11 @@ import {
   configSignature,
   deriveIntermediatesDir,
   resolveOptions,
-  DEFAULT_TRANSCRIBE_MODEL,
 } from "../src/core/config.js";
-import { resolveThinking, isThinkingConfigError } from "../src/providers/gemini.js";
+import {
+  resolveThinking,
+  isThinkingConfigError,
+} from "../src/providers/gemini-models.js";
 import { transcribe } from "../src/core/pipeline.js";
 
 describe("configSignature (cache invalidation on option change)", () => {
@@ -74,7 +76,12 @@ describe("resolveThinking (per-model thinking config)", () => {
   });
   it("floors 3.x pro to LOW (MINIMAL unsupported), flash to MINIMAL", () => {
     expect(resolveThinking("gemini-3.1-pro-preview")).toEqual({ thinkingLevel: "LOW" });
-    expect(resolveThinking("gemini-flash-latest")).toEqual({ thinkingLevel: "MINIMAL" });
+    expect(resolveThinking("gemini-3.8-flash")).toEqual({ thinkingLevel: "MINIMAL" });
+  });
+  it("asks moving aliases for LOW, which their newest targets accept", () => {
+    // gemini-flash-latest rejected MINIMAL live (Nov 2026): every naming call paid a retry.
+    expect(resolveThinking("gemini-flash-latest")).toEqual({ thinkingLevel: "LOW" });
+    expect(resolveThinking("gemini-pro-latest")).toEqual({ thinkingLevel: "LOW" });
   });
   it("returns nothing for 2.0 (no thinking control)", () => {
     expect(resolveThinking("gemini-2.0-flash")).toBeUndefined();
@@ -92,9 +99,6 @@ describe("transcribe() option validation (clear errors, not cryptic crashes)", (
   it("rejects a missing input", async () => {
     // @ts-expect-error intentionally bad
     await expect(transcribe({ outputDir: "out" })).rejects.toThrow(/'input'.*required/);
-  });
-  it("defaults the transcription model to gemini-3.1-pro-preview", () => {
-    expect(DEFAULT_TRANSCRIBE_MODEL).toBe("gemini-3.1-pro-preview");
   });
   it("defaults outputDir to the input's folder and format to markdown", () => {
     const o = resolveOptions({ input: "/a/b/meeting.mp4" });

@@ -5,13 +5,13 @@ AssemblyAI universal-2): 17 recordings, 9 minutes to 1h27m, two to five speakers
 referred to here as **M01–M17**; no participant's speech is quoted. Built on `fix/field-report-1`, whose fixes
 are assumed throughout.
 
-| code | length | code | length | code | length | code | length |
-| ---- | ------ | ---- | ------ | ---- | ------ | ---- | ------ |
-| M01  | 42 min | M06  | 28 min | M11  | 65 min | M16  | 65 min |
-| M02  | 33 min | M07  | 59 min | M12  | 87 min | M17  | 23 min |
-| M03  | 48 min | M08  | 26 min | M13  | 63 min |      |        |
-| M04  | 34 min | M09  | 41 min | M14  | 32 min |      |        |
-| M05  | 73 min | M10  | 16 min | M15  | 9 min (Korean) | |   |
+| code | length | code | length | code | length         | code | length |
+| ---- | ------ | ---- | ------ | ---- | -------------- | ---- | ------ |
+| M01  | 42 min | M06  | 28 min | M11  | 65 min         | M16  | 65 min |
+| M02  | 33 min | M07  | 59 min | M12  | 87 min         | M17  | 23 min |
+| M03  | 48 min | M08  | 26 min | M13  | 63 min         |      |        |
+| M04  | 34 min | M09  | 41 min | M14  | 32 min         |      |        |
+| M05  | 73 min | M10  | 16 min | M15  | 9 min (Korean) |      |        |
 
 Every run reported success. Three lost a whole chunk of speech, and every run trimmed its output.
 
@@ -23,17 +23,17 @@ of the pipeline. Each transcript is measured against the words AssemblyAI heard:
 or more ASR content words with no matching transcript word within 10 s; **agreement** is the share of ASR content
 words found in the transcript within 10 s.
 
-| #   | Issue                                                                                    | Status    |
-| --- | ---------------------------------------------------------------------------------------- | --------- |
+| #   | Issue                                                                                      | Status    |
+| --- | ------------------------------------------------------------------------------------------ | --------- |
 | 1   | A chunk comes back short (cut off, `[silence]`, repetition loop) and ships as success      | **FIXED** |
-| 2   | Overlap ownership decided on the LLM's clock drops a chunk's opening lines               | **FIXED** |
+| 2   | Overlap ownership decided on the LLM's clock drops a chunk's opening lines                 | **FIXED** |
 | 3   | A few words matched far apart, or not at all, stretch over a gap and hide it from gap-fill | **FIXED** |
-| 4   | Gap-fill's "already in the next segment" check passes any gap before a long turn         | **FIXED** |
-| 5   | Finalize clamps end times to start + 7 s and drops turns under 0.2 s                      | **FIXED** |
-| 6   | A recording in a language the ASR didn't expect loses lines                              | **FIXED** |
-| 7   | Receipts leave out thinking tokens                                                       | **FIXED** |
-| 8   | Gemini 4 (Argon, Carbon, Hydrogen) and 3.8 Flash on offmute's prompt                     | §8        |
-| —   | Still open                                                                               | §9        |
+| 4   | Gap-fill's "already in the next segment" check passes any gap before a long turn           | **FIXED** |
+| 5   | Finalize clamps end times to start + 7 s and drops turns under 0.2 s                       | **FIXED** |
+| 6   | A recording in a language the ASR didn't expect loses lines                                | **FIXED** |
+| 7   | Receipts leave out thinking tokens                                                         | **FIXED** |
+| 8   | Gemini 4 (Argon, Carbon, Hydrogen) and 3.8 Flash on offmute's prompt                       | §8        |
+| —   | Still open                                                                                 | §9        |
 
 ## 1. A chunk comes back short → FIXED
 
@@ -112,17 +112,17 @@ $1.71 (+17%). Thinking is now billed as output (`src/providers/gemini-usage.ts`)
 
 ## Results
 
-| code | missing, 0.1.1 | missing, field-report-1 | missing, this branch | agreement 0.1.1 → branch |
-| ---- | -------------- | ----------------------- | -------------------- | ------------------------ |
-| M01  | 135            | 0                       | 0                    | 91.3% → 95.0%            |
-| M02  | 0              | 18                      | 0                    | 95.3% → 96.2%            |
-| M05  | 15             | 21                      | 0                    | 96.8% → 97.0%            |
-| M07  | 15             | 15                      | 15                   | 89.9% → 90.0%            |
-| M11  | 932            | 0                       | 33 (0 with the guard) | 81.2% → 94.3%           |
-| M12  | 598            | 111                     | 0                    | 82.5% → 90.1%            |
-| M16  | 678            | 32                      | 0                    | 79.9% → 94.0%            |
-| others (10) | 0       | 0                       | 0                    | unchanged to +1.2 points; M15 not meaningful (wrong-language ASR) |
-| **all 17** | **2,373** | **197**                | **48**               | mean (16, without M15) 91.9% → 94.5% |
+| code        | missing, 0.1.1 | missing, field-report-1 | missing, this branch  | agreement 0.1.1 → branch                                          |
+| ----------- | -------------- | ----------------------- | --------------------- | ----------------------------------------------------------------- |
+| M01         | 135            | 0                       | 0                     | 91.3% → 95.0%                                                     |
+| M02         | 0              | 18                      | 0                     | 95.3% → 96.2%                                                     |
+| M05         | 15             | 21                      | 0                     | 96.8% → 97.0%                                                     |
+| M07         | 15             | 15                      | 15                    | 89.9% → 90.0%                                                     |
+| M11         | 932            | 0                       | 33 (0 with the guard) | 81.2% → 94.3%                                                     |
+| M12         | 598            | 111                     | 0                     | 82.5% → 90.1%                                                     |
+| M16         | 678            | 32                      | 0                     | 79.9% → 94.0%                                                     |
+| others (10) | 0              | 0                       | 0                     | unchanged to +1.2 points; M15 not meaningful (wrong-language ASR) |
+| **all 17**  | **2,373**      | **197**                 | **48**                | mean (16, without M15) 91.9% → 94.5%                              |
 
 The replay makes no API calls, so the guard's retries aren't in these numbers; M11's 33 words appear only when its
 failed chunk isn't retried. 124 tests pass (21 new); `tsc` and `eslint` are clean.
@@ -132,17 +132,19 @@ failed chunk isn't retried. 124 tests pass (21 new); `tsc` and `eslint` are clea
 Nine 10-minute chunks from these meetings (three of them the chunks 0.1.1 lost, which favours the other models
 there), offmute's own prompt, thinking LOW, scored against ElevenLabs Scribe v2 and Gemini 3.5 Transcribe:
 
-| model                    | speech kept | failed attempts | $ / audio hour        | s / chunk |
-| ------------------------ | ----------- | --------------- | --------------------- | --------- |
-| `gemini-3.1-pro-preview` | 72.9%       | 8 of 24         | 0.74                  | 39        |
-| `gemini-4-hydrogen`      | 96.6%       | 0 of 11         | 0.74                  | 44        |
-| `gemini-4-argon`         | 97.3%       | 0 of 11         | 0.67 (1.34 from 1 Dec) | 74       |
-| `gemini-4-carbon`        | 97.0%       | 0 of 11         | 0.70 (1.40 from 1 Dec) | 109      |
-| `gemini-3.8-flash`       | 77.3%       | 2 of 11         | 0.27 (0.54 from 1 Jan) | 55       |
+| model                    | speech kept | failed attempts | $ / audio hour         | s / chunk |
+| ------------------------ | ----------- | --------------- | ---------------------- | --------- |
+| `gemini-3.1-pro-preview` | 72.9%       | 8 of 24         | 0.74                   | 39        |
+| `gemini-4-hydrogen`      | 96.6%       | 0 of 11         | 0.74                   | 44        |
+| `gemini-4-argon`         | 97.3%       | 0 of 11         | 0.67 (1.34 from 1 Dec) | 74        |
+| `gemini-4-carbon`        | 97.0%       | 0 of 11         | 0.70 (1.40 from 1 Dec) | 109       |
+| `gemini-3.8-flash`       | 77.3%       | 2 of 11         | 0.27 (0.54 from 1 Jan) | 55        |
 
 On chunks every model completed, speaker labels agreed with the references 96–97% for Gemini 4 and 84% for
 3.1 Pro. Hydrogen on four whole meetings lost no chunk and agreed with the ASR 0.2–1.2 points less than 3.1 Pro
 (one run each). The default model is unchanged; `offmute-v2 models` lists Hydrogen, 3.8 Flash and Argon.
+
+**Update, 18 Nov 2026:** 0.2.0 makes Hydrogen the default and adds `--pro` for Argon.
 
 ## 9. Still open
 
@@ -151,3 +153,4 @@ On chunks every model completed, speaker labels agreed with the references 96–
 - Chinese and Japanese text isn't split into words, so alignment and the guard count it poorly.
 - A silent last chunk fails the 3-segment minimum and is retried once (about $0.02).
 - Argon and Carbon's REST non-streaming output caps at 32,768 tokens; the browser path asks for 65,536.
+  (Fixed in 0.2.0: the browser path asks them for at most 32,768.)
